@@ -66,7 +66,8 @@ cannot express the control you asked for" is not "the control held".
   the schema expresses, and it is not enforced on Bubblewrap
   ([findings.md](./findings.md) §9). There is no CPU, memory or process-count
   field at all ([findings.md](./findings.md) §12): a sandboxed workload
-  allocated 512 MB and saturated 4 cores on both backends. This is delegable —
+  committed 512 MB and obtained ~10 of 12 cores on macOS and ~5.6 of 6 in a
+  container. This is delegable —
   a container cgroup (`mem_limit`, `cpus`, `pids_limit`) enforces it, and the
   `mxc-limits` profile demonstrates the OOM kill landing. On a bare macOS host
   there is no equivalent.

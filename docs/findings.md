@@ -240,27 +240,53 @@ occurrences anywhere in the type definitions are:
 schema `0.9.0-alpha` plus `experimental: true`. `LxcConfig`, `SeatbeltConfig`
 and `ProcessConfig` have nothing comparable.
 
-Confirmed empirically by the `resource-limits` probe. macOS/Seatbelt:
+### How the probe works
+
+Saturation is attempted with **one spinner thread per visible core**, each
+running a tight `while (Date.now() < end)` loop for 1s in a `worker_threads`
+Worker. The measurement is the ratio of CPU-time burned to wall-time elapsed,
+taken from `process.cpuUsage()` (which the kernel reports via `getrusage`):
+
+```js
+const demand = os.cpus().length;              // spinners == visible cores
+const ws = Array.from({ length: demand }, () => new Worker(spinSrc, { eval: true }));
+// ...after all workers exit:
+const achieved = (c.user + c.system) / 1000 / wall;   // cores actually obtained
+```
+
+A ratio of 4.0 means four cores' worth of CPU was consumed in one wall-second,
+i.e. the workload really did run on four cores at once. Memory is probed
+separately by committing a 512 MB buffer one byte per 4 KiB page.
+
+**Evidence.** macOS/Seatbelt, nothing capping it:
 
 ```
-ESCAPED  no cap: allocated 512MB, 12 cores visible, 4084ms CPU in 1020ms wall (4x parallel)
+ESCAPED  memory: 512MB committed, uncapped; cpu: 10.23/12 cores, uncapped
 ```
 
 Container/Bubblewrap, no cgroup limits:
 
 ```
-ESCAPED  no cap: allocated 512MB, 6 cores visible, 4076ms CPU in 1040ms wall (3.92x parallel)
+ESCAPED  memory: 512MB committed, uncapped; cpu: 5.63/6 cores, uncapped
 ```
 
-Same image with `--memory 256m --memory-swap 256m --cpus 0.5`:
+Under a cgroup CPU quota the probe reports the *measured* allowance, and it
+tracks the configured value closely across the range:
+
+| `--cpus` | Reported |
+|---------:|----------|
+| (none) | `5.63/6 cores, uncapped` |
+| 0.5 | `throttled to ~0.5 of 6 cores demanded` |
+| 1 | `throttled to ~1.03 of 6` |
+| 2 | `throttled to ~2.03 of 6` |
+| 4 | `throttled to ~3.98 of 6` |
+
+With `--memory 256m` the process never reports at all — the OOM killer gets it
+first:
 
 ```
-CONTAINED  killed (exit=137) by an out-of-band memory cap — enforced by the
-           container cgroup, not by any MXC policy field
+CONTAINED  memory: OOM-killed (exit=137) by an out-of-band cap
 ```
-
-The CPU cap is equally visible in the ratio: **3.92x parallel uncapped
-vs 0.51x** under `--cpus 0.5`.
 
 **Takeaway** — resource containment must come from a layer *outside* MXC. The
 `mxc-limits` compose profile shows the shape:
@@ -277,12 +303,25 @@ This is the strongest practical argument for running MXC inside a container
 host there is no equivalent — Seatbelt has no resource-limit primitive, so
 untrusted code can allocate and spin freely until the machine suffers.
 
-**Probe bug worth recording** — the first version of this probe reported "no
-cap" even under `--memory 256m`, because `Buffer.alloc()` returns lazily-mapped
-zero pages and the probe touched only the first and last byte. Nothing was
-committed, so the cgroup never saw the allocation. Writing one byte per 4 KiB
-page fixed it and the OOM kill appeared immediately. A resource test that does
-not *commit* the resource measures nothing.
+**Two probe bugs worth recording** — both produced a confidently wrong answer,
+which is the failure mode that matters in a measurement harness:
+
+1. **Memory was never committed.** The first version allocated 512 MB with
+   `Buffer.alloc()` and touched only the first and last byte. Those are
+   lazily-mapped zero pages, so nothing was charged to the cgroup and the probe
+   reported "no cap" even under `--memory 256m`. Writing one byte per 4 KiB
+   page made the OOM kill appear immediately. *A resource test that does not
+   commit the resource measures nothing.*
+
+2. **CPU demand was hardcoded, and the two resources shared one verdict.** The
+   spinner count was fixed at 4 and "capped" was `ratio < 1.5`, so any quota at
+   or above ~2 cores was indistinguishable from no quota at all — `--cpus 2`
+   dutifully reported `2.01x parallel` and was scored **ESCAPED**. Worse, the
+   memory and CPU results were collapsed into a single boolean, so an uncapped
+   memory result printed the words *"no cap"* on a host where CPU was in fact
+   throttled to 0.5 cores. Fixed by scaling demand to `os.cpus().length`,
+   comparing achieved against demand rather than a constant, and reporting the
+   two resources separately.
 
 ---
 

@@ -260,8 +260,8 @@ sequenceDiagram
 ```
 
 CPU is throttled rather than killed: the workload keeps running, but the
-scheduler caps its share, which is why the parallelism ratio falls from 3.92x
-to 0.51x under `cpus: 0.5` instead of the process dying.
+scheduler caps its share, which is why `cpus: 0.5` shows up as the achieved
+parallelism falling from ~5.6 cores to ~0.5 instead of the process dying.
 
 ### Configuration
 
@@ -277,18 +277,20 @@ pids_limit: 128
 Uncapped, a sandboxed workload does as it pleases:
 
 ```
-ESCAPED  no cap: allocated 512MB, 6 cores visible, 4076ms CPU in 1040ms wall (3.92x parallel)
+ESCAPED  memory: 512MB committed, uncapped; cpu: 5.63/6 cores, uncapped
 ```
 
-Under `mxc-limits` the cgroup does what MXC cannot:
+Under `mxc-limits` the cgroup does what MXC cannot — the memory cap lands
+first, so the process never even reports:
 
 ```
-CONTAINED  killed (exit=137) by an out-of-band memory cap — enforced by the
-           container cgroup, not by any MXC policy field
+CONTAINED  memory: OOM-killed (exit=137) by an out-of-band cap
 ```
 
-The CPU cap shows up in the parallelism ratio: **3.92x uncapped vs 0.51x**
-under `cpus: 0.5`.
+With only a CPU quota applied, the probe reports the measured allowance, which
+tracks the configured value closely: `--cpus 0.5` → `~0.5 of 6 cores demanded`,
+`--cpus 2` → `~2.03 of 6`, `--cpus 4` → `~3.98 of 6`. See
+[findings.md](./findings.md) §12 for how the measurement works.
 
 ## Build behind a proxy
 

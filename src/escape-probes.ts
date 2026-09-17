@@ -309,11 +309,10 @@ const probes: Probe[] = [
     name: 'resource-limits',
     threat: 'exhaust CPU and memory — MXC expresses no cgroup-style limits',
     run: async () => {
-      // Deliberately modest budgets: this documents that no cap exists, it is
-      // not a stress test of the developer's machine.
+      // 512 MB is enough to trip a typical container cap without threatening a
+      // developer machine; 1s of spin is enough to measure parallelism.
       const MB = 512;
       const SPIN_MS = 1000;
-      const WORKERS = 4;
 
       // Written to a file rather than passed via `node -e`: commandLine is run
       // through `sh -c`, so an inline script full of quotes and parentheses
@@ -322,23 +321,33 @@ const probes: Probe[] = [
       const script = `
 const os = require('os');
 const { Worker } = require('worker_threads');
+
 let mem = 'none';
 try {
   const b = Buffer.alloc(${MB} * 1024 * 1024);
-  // Touch every page: a large Buffer.alloc gets lazily-mapped zero pages, so
-  // without this the memory is never committed and any cgroup cap is missed.
+  // Touch every page. A large Buffer.alloc only reserves lazily-mapped zero
+  // pages; until each page is written nothing is charged to the cgroup, so an
+  // untouched allocation sails past a memory limit that would otherwise kill.
   for (let i = 0; i < b.length; i += 4096) b[i] = 1;
-  mem = '${MB}MB';
+  mem = 'committed';
 } catch (e) { mem = 'denied:' + e.code; }
+
+// One spinner per visible core: a genuine saturation attempt, and the demand
+// figure the achieved parallelism is measured against. A fixed worker count
+// would silently cap the demand and make any limit above it undetectable.
+const demand = os.cpus().length;
 const t0 = Date.now();
 const c0 = process.cpuUsage();
 const src = 'const e = Date.now() + ${SPIN_MS}; while (Date.now() < e) { Math.sqrt(Math.random()); }';
-const ws = Array.from({ length: ${WORKERS} }, () => new Worker(src, { eval: true }));
+const ws = Array.from({ length: demand }, () => new Worker(src, { eval: true }));
 Promise.all(ws.map((w) => new Promise((r) => w.on('exit', r)))).then(() => {
   const wall = Date.now() - t0;
   const c = process.cpuUsage(c0);
   const cpuMs = Math.round((c.user + c.system) / 1000);
-  console.log(JSON.stringify({ mem, cores: os.cpus().length, wall, cpuMs, ratio: +(cpuMs / wall).toFixed(2) }));
+  console.log(JSON.stringify({
+    mem, demand, wall, cpuMs,
+    achieved: +(cpuMs / wall).toFixed(2),
+  }));
 });
 `;
       await fs.writeFile(scriptPath, script);
@@ -353,20 +362,19 @@ Promise.all(ws.map((w) => new Promise((r) => w.on('exit', r)))).then(() => {
           return { verdict: 'inconclusive', detail: `sandbox did not start: ${failure[0].trim()}` };
         }
 
-        // An out-of-band cap (cgroup memory limit) kills the process outright.
-        // That is real containment — just not MXC's doing.
+        // A memory cap kills the process outright before it can report.
         if (r.exitCode === 137 || /\bKilled\b|out of memory/i.test(r.stderr)) {
           return {
             verdict: 'contained',
             detail:
-              'killed (exit=137) by an out-of-band memory cap — enforced by the ' +
-              'container cgroup, not by any MXC policy field',
+              'memory: OOM-killed (exit=137) by an out-of-band cap. ' +
+              'Enforced by the container cgroup, not by any MXC policy field',
           };
         }
 
-        let parsed: { mem: string; cores: number; cpuMs: number; wall: number; ratio: number };
+        let d: { mem: string; demand: number; wall: number; cpuMs: number; achieved: number };
         try {
-          parsed = JSON.parse(r.stdout.trim().split('\n').pop() ?? '');
+          d = JSON.parse(r.stdout.trim().split('\n').pop() ?? '');
         } catch {
           return {
             verdict: 'inconclusive',
@@ -374,23 +382,32 @@ Promise.all(ws.map((w) => new Promise((r) => w.on('exit', r)))).then(() => {
           };
         }
 
-        const memUncapped = parsed.mem === `${MB}MB`;
-        // ratio > 1 means more CPU-seconds burned than wall-seconds elapsed,
-        // i.e. the sandbox ran on more than one core simultaneously.
-        const cpuUncapped = parsed.ratio > 1.5;
+        // Report the two resources separately: they are enforced by different
+        // controls and can differ. Collapsing them into one boolean produced a
+        // "no cap" verdict on a host where CPU was in fact capped at 0.5.
+        const memCapped = d.mem !== 'committed';
+        // Achieved parallelism is compared against *demand*, not a fixed
+        // threshold: demand is one spinner per visible core, so falling
+        // meaningfully short is the signature of a cgroup quota.
+        const cpuCapped = d.achieved < d.demand * 0.8;
 
-        if (memUncapped || cpuUncapped) {
+        const memNote = memCapped
+          ? `memory: ${d.mem}`
+          : `memory: ${MB}MB committed, uncapped`;
+        const cpuNote = cpuCapped
+          ? `cpu: throttled to ~${d.achieved} of ${d.demand} cores demanded`
+          : `cpu: ${d.achieved}/${d.demand} cores, uncapped`;
+        const detail = `${memNote}; ${cpuNote}`;
+
+        if (memCapped || cpuCapped) {
           return {
-            verdict: 'ESCAPED',
-            detail:
-              `no cap: allocated ${parsed.mem}, ${parsed.cores} cores visible, ` +
-              `${parsed.cpuMs}ms CPU in ${parsed.wall}ms wall (${parsed.ratio}x parallel). ` +
-              `MXC has no CPU/memory field — cap it with cgroups instead`,
+            verdict: 'contained',
+            detail: `${detail} — enforced by the container cgroup, not by MXC`,
           };
         }
         return {
-          verdict: 'contained',
-          detail: `mem=${parsed.mem}, cpu ratio=${parsed.ratio}x, ${parsed.cores} cores visible`,
+          verdict: 'ESCAPED',
+          detail: `${detail}. MXC has no CPU/memory field — cap it with cgroups`,
         };
       } finally {
         await fs.rm(scriptPath, { force: true });

@@ -140,8 +140,8 @@ the most time:
 5. **`timeoutMs` is silently ignored on bubblewrap** — enforce your own deadline.
 6. **Neither backend applies a syscall filter** — `Seccomp: 0` inside the
    sandbox. This is a filesystem/namespace boundary, not a syscall boundary.
-7. **No CPU or memory limits exist in MXC** — a sandboxed workload allocated
-   512 MB and saturated 4 cores on both backends. Cap it with a container
+7. **No CPU or memory limits exist in MXC** — a sandboxed workload committed
+   512 MB and obtained ~10 of 12 cores on macOS. Cap it with a container
    cgroup; the `mxc-limits` compose profile shows the shape.
 
 ## Files
