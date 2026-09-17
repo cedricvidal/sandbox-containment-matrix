@@ -7,6 +7,7 @@
     "dev": "tsx src/index.ts",
     "hello": "tsx src/hello-sandbox.ts",
     "probe": "tsx src/platform-probe.ts",
+    "probes": "tsx src/escape-probes.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
