@@ -9,6 +9,7 @@ Working notes for the `sandbox-mxc-sdk-typescript` experiment. The root
 | [threat-model.md](./threat-model.md) | What the tests actually demonstrate, and what they do not |
 | [backends.md](./backends.md) | Seatbelt vs Bubblewrap capability comparison |
 | [docker.md](./docker.md) | Running the experiment in a container, with architecture diagrams |
+| [kubernetes.md](./kubernetes.md) | How sandboxing differs between docker compose and AKS |
 
 ## Convention
 

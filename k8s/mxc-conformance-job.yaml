@@ -1,0 +1,26 @@
+# Policy-conformance suite (the `pnpm dev` scenarios), same pod shape as the
+# probe job so the two environments differ only in the runtime beneath them.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mxc-conformance
+  namespace: mxc-sandbox-eval
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      hostUsers: false
+      containers:
+        - name: mxc
+          image: acrscopev2int.azurecr.io/sandbox-mxc-sdk-typescript:latest
+          command: ["pnpm", "dev"]
+          securityContext:
+            procMount: Unmasked
+            privileged: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: "2", memory: "1Gi" }
+            limits:   { cpu: "2", memory: "1Gi" }

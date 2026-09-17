@@ -1,0 +1,17 @@
+# Ephemeral namespace for the MXC sandboxing comparison.
+#
+# NOT applied imperatively: aks-scope-v2-int is reconciled by FluxCD with
+# prune: true, so `kubectl apply` would drift and then be reverted. This goes
+# through the GitOps repo (growth-ecosystems/scope-core-infra) like any other
+# cluster object.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mxc-sandbox-eval
+  labels:
+    # The workload needs an unmasked /proc, which Pod Security Admission
+    # classifies as non-baseline. Scoped to this throwaway namespace only.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+    purpose: ephemeral-experiment
+    owner: cedricvidal

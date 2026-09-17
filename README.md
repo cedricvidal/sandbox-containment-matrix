@@ -24,6 +24,7 @@ Findings are recorded in [`docs/`](./docs) as they are discovered:
 | [docs/threat-model.md](./docs/threat-model.md) | What the tests demonstrate, and what they do not |
 | [docs/backends.md](./docs/backends.md) | Seatbelt vs Bubblewrap capability comparison |
 | [docs/docker.md](./docs/docker.md) | Running in a container, with architecture diagrams |
+| [docs/kubernetes.md](./docs/kubernetes.md) | Docker Compose vs AKS sandboxing differences |
 
 ## What this experiment does
 
@@ -160,7 +161,9 @@ the most time:
 | `Dockerfile` | Debian + bubblewrap + pnpm image |
 | `src/trusted-latency.ts` | trusted-side responsiveness under sandboxed CPU load |
 | `docker-compose.yml` | five profiles: minimal, resource-capped, core-reserved, stock (fails), privileged |
-| `docs/` | findings log, threat model, backend comparison, Docker guide |
+| `docs/` | findings log, threat model, backend comparison, Docker + AKS guides |
+| `k8s/` | Kubernetes manifests (applied via GitOps, not `kubectl apply`) |
+| `scripts/` | reproduction scripts for each finding |
 
 ## References
 

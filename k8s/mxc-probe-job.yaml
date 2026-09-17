@@ -1,0 +1,39 @@
+# Runs the same two suites the docker compose profiles run, so the results are
+# directly comparable with docs/docker.md.
+#
+# The interesting difference from Docker: MXC's bubblewrap backend needs an
+# unmasked /proc, which locally required `--security-opt unmask=ALL` — a blunt,
+# container-wide switch. Kubernetes 1.30+ instead allows procMount: Unmasked
+# when the pod runs in its own user namespace (hostUsers: false), so the same
+# capability is obtained WITHOUT privileged and with all capabilities dropped.
+# Verified accepted by the aks-scope-v2-int API server via --dry-run=server.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mxc-probes
+  namespace: mxc-sandbox-eval
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      # User namespace: root in the pod maps to an unprivileged host uid.
+      # There is no equivalent in the local docker compose setup.
+      hostUsers: false
+      containers:
+        - name: mxc
+          image: acrscopev2int.azurecr.io/sandbox-mxc-sdk-typescript:latest
+          command: ["pnpm", "probes"]
+          securityContext:
+            procMount: Unmasked          # docker: --security-opt unmask=ALL
+            privileged: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            # Guaranteed QoS (requests == limits, integer CPU). With the
+            # kubelet's static CPU manager policy this grants *exclusive*
+            # cores — the Kubernetes-native form of the `cpuset` fix in
+            # docs/findings.md §16, rather than a shared CFS quota.
+            requests: { cpu: "4", memory: "1Gi" }
+            limits:   { cpu: "4", memory: "1Gi" }
