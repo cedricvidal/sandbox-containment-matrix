@@ -30,11 +30,14 @@ build_image() {
 
 # Run a command in the image with the MXC security options applied.
 # Usage: mxc_run [extra docker args...] -- <command...>
+# Note the `${arr[@]+...}` guards: macOS ships bash 3.2, where expanding an
+# empty array under `set -u` is an "unbound variable" error. Without them this
+# helper silently produced no output at all.
 mxc_run() {
   local docker_args=()
   while [[ $# -gt 0 && "$1" != "--" ]]; do docker_args+=("$1"); shift; done
   shift || true
-  docker run --rm "${MXC_OPTS[@]}" "${docker_args[@]}" "$IMAGE" "$@"
+  docker run --rm "${MXC_OPTS[@]}" ${docker_args[@]+"${docker_args[@]}"} "$IMAGE" "$@"
 }
 
 hr() { printf '%s\n' "------------------------------------------------------------"; }
