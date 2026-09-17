@@ -1,5 +1,8 @@
 # MXC on Linux uses the `bubblewrap` backend, which needs `bwrap` >= 0.5.0 and
 # working user namespaces. Debian bookworm ships bwrap 0.8.0.
+#
+# Must be a glibc base image: the SDK ships a prebuilt glibc `lxc-exec`, which
+# fails to relocate on Alpine/musl even with gcompat or libc6-compat.
 FROM node:22-bookworm-slim
 
 RUN apt-get update \

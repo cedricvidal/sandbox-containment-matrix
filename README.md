@@ -217,6 +217,20 @@ Things the upstream sample does not spell out, learned the hard way here:
     profiles as security boundaries, running MXC inside a container is the more
     defensible posture today.
 
+11. **Alpine does not work — use a glibc base image.** The SDK ships a
+    *prebuilt glibc* `lxc-exec`, and neither `libc6-compat` nor `gcompat`
+    satisfies it:
+
+    ```
+    Error relocating .../bin/arm64/lxc-exec: __res_init: symbol not found
+    exit: 127
+    ```
+
+    Tested on `node:22-alpine` (arm64) with both shims. `getPlatformSupport()`
+    still cheerfully reported `isSupported: true, backends: ['bubblewrap']` —
+    a third demonstration of finding 7. Hence `node:22-bookworm-slim`:
+    glibc, and bwrap 0.8.0 in the default repos.
+
 ## Files
 
 | File | Purpose |
