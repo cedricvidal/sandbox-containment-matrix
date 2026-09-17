@@ -130,6 +130,63 @@ This is a mount-visibility problem, not a capability or syscall-filter one.
 `--security-opt systempaths=unconfined` (which this Podman host accepted but
 did not honour, so it still failed here).
 
+### Architecture: bubblewrap inside Docker
+
+Four nested boundaries on a Mac. The container is a genuine second layer — the
+sandbox's "host" is the container filesystem, not your laptop.
+
+```mermaid
+flowchart TB
+  subgraph mac["macOS host (arm64)"]
+    direction TB
+    cli["docker compose run"]
+    subgraph vm["Linux VM (Podman/Docker Desktop)"]
+      direction TB
+      subgraph ctr["Container · node:22-bookworm-slim<br/>label=disable · unmask=ALL · /dev/net/tun<br/>no --privileged, no added caps"]
+        direction TB
+        app["Node + @microsoft/mxc-sdk<br/>src/index.ts"]
+        exec["bin/arm64/lxc-exec<br/>(prebuilt, glibc)"]
+        subgraph bw["bwrap namespaces: user · pid · ipc · uts · mount"]
+          direction TB
+          work["sandboxed workload<br/>deny-by-default filesystem"]
+        end
+      end
+    end
+  end
+
+  cli --> app
+  app -->|"ContainerConfig JSON"| exec
+  exec -->|"spawns"| bw
+  work -.->|"stdout / stderr / exit code"| app
+```
+
+Why each `security_opt` is required, mapped to the layer it unblocks:
+
+```mermaid
+flowchart LR
+  A["bwrap needs<br/>/newroot/dev/pts"] -->|"SELinux denies the mount"| B["label=disable"]
+  C["bwrap needs<br/>/newroot/proc"] -->|"runtime masks parts of /proc,<br/>so a nested proc mount is refused"| D["unmask=ALL"]
+  E["slirp4netns needs<br/>a private netns"] -->|"no TUN device in the container"| F["devices: /dev/net/tun"]
+```
+
+The filesystem policy and the network policy take different paths — only the
+schema 0.8 per-CIDR rules need the TUN device and the private network namespace:
+
+```mermaid
+flowchart TB
+  P["SandboxPolicy"] --> FS["filesystem:<br/>readonlyPaths / readwritePaths"]
+  P --> NET["network"]
+
+  FS -->|"--ro-bind / --bind"| MNT["mount namespace<br/>(unlisted paths simply absent)"]
+
+  NET --> N1["allowOutbound: false<br/>(schema 0.7)"]
+  NET --> N2["egress rules + CIDRs<br/>(schema 0.8)"]
+
+  N1 -->|"--unshare-net"| LO["private netns,<br/>loopback only"]
+  N2 -->|"slirp4netns + iptables"| FW["private netns<br/>+ nft rules"]
+  FW -.->|"requires"| TUN["/dev/net/tun"]
+```
+
 Container result — Debian bookworm, bwrap 0.8.0, arm64:
 
 ```
