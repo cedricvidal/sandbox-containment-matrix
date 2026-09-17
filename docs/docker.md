@@ -71,33 +71,61 @@ Engine proper.
 
 ## Architecture
 
-Four nested boundaries on a Mac. The container is a genuine second layer — the
-sandbox's "host" is the container filesystem, not your laptop.
+Two separate things are easy to confuse here, so they get two diagrams:
+**where things live** (nesting) and **what calls what** (flow).
+
+### 1a. Nesting — which boundary is inside which
+
+No arrows: this is purely containment. Each numbered layer is fully inside the
+one above it.
 
 ```mermaid
 flowchart TB
-  subgraph mac["macOS host (arm64)"]
-    direction TB
-    cli["docker compose run"]
-    subgraph vm["Linux VM (Podman/Docker Desktop)"]
-      direction TB
-      subgraph ctr["Container · node:22-bookworm-slim<br/>label=disable · unmask=ALL · /dev/net/tun<br/>no --privileged, no added caps"]
+  subgraph L1["1 · macOS host (your laptop) — arm64"]
+    subgraph L2["2 · Linux VM (the Podman/Docker Desktop machine)"]
+      subgraph L3["3 · Container — node:22-bookworm-slim"]
         direction TB
-        app["Node + @microsoft/mxc-sdk<br/>src/index.ts"]
-        exec["bin/arm64/lxc-exec<br/>(prebuilt, glibc)"]
-        subgraph bw["bwrap namespaces: user · pid · ipc · uts · mount"]
-          direction TB
-          work["sandboxed workload<br/>deny-by-default filesystem"]
+        trusted["TRUSTED side of the container:<br/>Node + @microsoft/mxc-sdk<br/>and the lxc-exec runner"]
+        subgraph L4["4 · bwrap sandbox — user/pid/ipc/uts/mount namespaces"]
+          untrusted["UNTRUSTED workload<br/>deny-by-default filesystem"]
         end
       end
     end
   end
-
-  cli --> app
-  app -->|"ContainerConfig JSON"| exec
-  exec -->|"spawns"| bw
-  work -.->|"stdout / stderr / exit code"| app
 ```
+
+The detail that matters: **the SDK and the `lxc-exec` runner live in layer 3,
+outside the sandbox they create.** Only the workload is inside layer 4. So the
+sandbox protects the container from the workload, and the container protects
+the VM (and your Mac) from everything above it. Two independent layers — a
+policy mistake in layer 4 is still caught by layer 3.
+
+### 1b. Flow — what calls what, in order
+
+Same components, now ordered in time rather than by nesting.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You as You (macOS shell)
+    participant Node as Node + MXC SDK<br/>(container, trusted)
+    participant Exec as lxc-exec<br/>(container, trusted)
+    participant BW as bwrap
+    participant Work as Workload<br/>(sandboxed, untrusted)
+
+    You->>Node: docker compose run --rm mxc
+    Node->>Node: createConfigFromPolicy(policy)
+    Node->>Exec: spawn + ContainerConfig JSON
+    Exec->>BW: build namespaces, apply bind mounts
+    BW->>Work: exec process.commandLine
+    Work-->>Node: stdout / stderr (pipes)
+    Work-->>Node: exit code
+    Node->>You: PASS / FAIL / ERROR
+```
+
+Reading the two together: steps 1–4 all happen in layer 3; step 5 is the moment
+execution crosses into layer 4; steps 6–7 are the only data coming back out,
+and they are just bytes on a pipe.
 
 Why each `security_opt` is required, mapped to the layer it unblocks:
 
