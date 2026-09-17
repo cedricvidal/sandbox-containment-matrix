@@ -460,9 +460,13 @@ capabilities dropped. It then fails at runtime:
 | privileged, host userns | `privileged: true` | works |
 | privileged + userns | `privileged: true`, `hostUsers: false` | works |
 
-bwrap builds its sandbox by unsharing a user namespace and writing a uid map;
-inside Kubernetes' own user namespace it cannot acquire the privilege to write
-that map, and capabilities do not change it.
+**Root cause (found later, see [aks-enablement.md](./aks-enablement.md))** — not
+the nesting itself. The AKS nodes run Ubuntu 24.04, where
+`kernel.apparmor_restrict_unprivileged_userns = 1` blocks unprivileged user
+namespace creation outright. Our local container is Debian bookworm, which does
+not ship that restriction. The platform difference was never Kubernetes vs
+Docker — it was the host distribution, and it is fixable with an AzureLinux or
+Kata node pool.
 
 **Takeaway** — use `privileged: true` **with** `hostUsers: false` so the
 privilege is scoped to the pod's user namespace rather than the node. Note the

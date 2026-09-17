@@ -25,6 +25,7 @@ Findings are recorded in [`docs/`](./docs) as they are discovered:
 | [docs/backends.md](./docs/backends.md) | Seatbelt vs Bubblewrap capability comparison |
 | [docs/docker.md](./docs/docker.md) | Running in a container, with architecture diagrams |
 | [docs/kubernetes.md](./docs/kubernetes.md) | Docker Compose vs AKS sandboxing differences |
+| [docs/aks-enablement.md](./docs/aks-enablement.md) | How AKS could be configured to run MXC unprivileged |
 
 ## What this experiment does
 

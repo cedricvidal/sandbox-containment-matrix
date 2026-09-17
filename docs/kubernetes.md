@@ -46,9 +46,13 @@ about whether the workload functions. Measured on the cluster:
 | E | `false` | `privileged: true` | **OK** |
 
 Bubblewrap builds its sandbox by unsharing a *user* namespace and writing a
-uid map. Inside Kubernetes' own user namespace it cannot obtain the privilege
-to write that map, and granting `SETUID`/`SETGID` changes nothing — the
-restriction is on the nested namespace, not on capabilities.
+uid map. It cannot, and granting `SETUID`/`SETGID` changes nothing.
+
+The reason is not Kubernetes: the nodes run **Ubuntu 24.04**, where
+`kernel.apparmor_restrict_unprivileged_userns = 1` blocks unprivileged user
+namespace creation. Our local container is Debian bookworm, which has no such
+restriction. See [aks-enablement.md](./aks-enablement.md) for the evidence and
+for the node-pool options that remove the need for `privileged` entirely.
 
 So the safe configuration that the API server happily admits is precisely the
 one in which MXC cannot run.
