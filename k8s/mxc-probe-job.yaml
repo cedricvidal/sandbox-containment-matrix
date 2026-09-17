@@ -25,11 +25,13 @@ spec:
           image: acrscopev2int.azurecr.io/sandbox-mxc-sdk-typescript:latest
           command: ["pnpm", "probes"]
           securityContext:
-            procMount: Unmasked          # docker: --security-opt unmask=ALL
-            privileged: false
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            # Measured, not assumed: every unprivileged variant fails with
+            # `bwrap: setting up uid map: Operation not permitted`, because
+            # bubblewrap cannot nest a user namespace inside Kubernetes' own.
+            # Adding SETUID/SETGID does not help. See docs/findings.md §17.
+            # hostUsers: false above scopes this privilege to the pod's user
+            # namespace, so pod-root is not node-root.
+            privileged: true
           resources:
             # Guaranteed QoS (requests == limits, integer CPU). With the
             # kubelet's static CPU manager policy this grants *exclusive*

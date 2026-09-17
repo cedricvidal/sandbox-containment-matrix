@@ -16,11 +16,9 @@ spec:
           image: acrscopev2int.azurecr.io/sandbox-mxc-sdk-typescript:latest
           command: ["pnpm", "dev"]
           securityContext:
-            procMount: Unmasked
-            privileged: false
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            # See docs/findings.md §17 — unprivileged variants cannot start
+            # bwrap; hostUsers: false scopes the privilege to the pod.
+            privileged: true
           resources:
             requests: { cpu: "2", memory: "1Gi" }
             limits:   { cpu: "2", memory: "1Gi" }

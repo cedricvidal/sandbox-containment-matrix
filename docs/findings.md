@@ -442,3 +442,36 @@ reserved core, rather than a `cpus:` quota that both sides share. The
 `Cpus_allowed_list` rather than `os.cpus()`, since the latter reports every
 host core regardless of the container's cpuset. Keep `mem_limit`: memory is a
 hard failure (OOM kill), and there the container-wide cap is the right tool.
+
+### 17. On Kubernetes, MXC needs `privileged` — and admission cannot tell you that
+
+**What happened** — the same image that runs unprivileged under Docker cannot
+start a sandbox on AKS unless the pod is privileged.
+
+**Evidence** — Kubernetes rejects `procMount: Unmasked` unless `hostUsers` is
+false, and with that set the pod is *admitted* unprivileged with all
+capabilities dropped. It then fails at runtime:
+
+| Variant | securityContext | Result |
+|---|---|---|
+| userns, drop `ALL` | `procMount: Unmasked` | `bwrap: setting up uid map: Operation not permitted` |
+| userns + `SETUID`,`SETGID` | `procMount: Unmasked` | identical failure |
+| userns, defaults | `procMount: Unmasked` | `bwrap: Failed to make / slave: Permission denied` |
+| privileged, host userns | `privileged: true` | works |
+| privileged + userns | `privileged: true`, `hostUsers: false` | works |
+
+bwrap builds its sandbox by unsharing a user namespace and writing a uid map;
+inside Kubernetes' own user namespace it cannot acquire the privilege to write
+that map, and capabilities do not change it.
+
+**Takeaway** — use `privileged: true` **with** `hostUsers: false` so the
+privilege is scoped to the pod's user namespace rather than the node. Note the
+direction of the result: on this workload **AKS is a weaker posture than local
+Docker**, which needs no privilege at all.
+
+This is §7 one layer up. There the SDK's own probe claimed a backend was
+available on a host where nothing could spawn; here the *Kubernetes API
+server* accepts a securityContext that cannot actually run the workload.
+`--dry-run=server` validates admission, not execution — I initially wrote up
+the opposite conclusion from a passing dry-run, and only running the pods
+corrected it. Full comparison in [kubernetes.md](./kubernetes.md).
