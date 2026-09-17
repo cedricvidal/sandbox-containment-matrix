@@ -14,6 +14,7 @@ Measured on macOS 15 arm64 (Seatbelt) and Debian bookworm arm64 in a container
 | Per-CIDR / port egress rules | **rejected at config time** | enforced (slirp4netns + iptables) |
 | Hostname allowlisting | no primitive | no — rules are IP/CIDR only |
 | `timeoutMs` | enforced | **silently ignored** |
+| CPU / memory / pids limits | **none** | **none** (delegate to cgroups) |
 | Syscall filtering | none | none |
 | Host env inheritance | never | never |
 
@@ -55,6 +56,9 @@ The last one is only safe *because* the suite now treats a launch failure as
 - **Per-site network policy is a Linux-only feature today.** On macOS the
   choice is all-or-nothing outbound plus a loopback exception; anything finer
   needs a proxy, and using the proxy is cooperative rather than enforced.
+- **Cap CPU and memory outside MXC.** Neither backend has a field for it. In a
+  container use `mem_limit` / `cpus` / `pids_limit` (the `mxc-limits` compose
+  profile); on bare macOS there is no equivalent.
 - **Smoke-test at startup on every platform.** `getPlatformSupport()` returning
   `isSupported: true` has been wrong in two distinct environments
   ([findings.md](./findings.md) §7).

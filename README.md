@@ -140,6 +140,9 @@ the most time:
 5. **`timeoutMs` is silently ignored on bubblewrap** — enforce your own deadline.
 6. **Neither backend applies a syscall filter** — `Seccomp: 0` inside the
    sandbox. This is a filesystem/namespace boundary, not a syscall boundary.
+7. **No CPU or memory limits exist in MXC** — a sandboxed workload allocated
+   512 MB and saturated 4 cores on both backends. Cap it with a container
+   cgroup; the `mxc-limits` compose profile shows the shape.
 
 ## Files
 
@@ -151,7 +154,7 @@ the most time:
 | `src/hello-sandbox.ts` | upstream README sample, adapted |
 | `src/platform-probe.ts` | dumps backends and discovered policy paths |
 | `Dockerfile` | Debian + bubblewrap + pnpm image |
-| `docker-compose.yml` | three profiles: minimal, stock (fails), privileged |
+| `docker-compose.yml` | four profiles: minimal, resource-capped, stock (fails), privileged |
 | `docs/` | findings log, threat model, backend comparison, Docker guide |
 
 ## References

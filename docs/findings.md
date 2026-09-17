@@ -220,11 +220,75 @@ authorised. For hostname allowlisting you need a proxy
 (`runtimeConfig.networkProxy`), and MXC only confines egress *to* the proxy —
 actually speaking HTTP to it is cooperative, not enforced.
 
+### 12. CPU and memory cannot be contained by MXC — use cgroups
+
+**What happened** — MXC expresses **no** CPU, memory, or process-count limit
+for the cross-platform backends. `timeoutMs` (wall clock) is the only resource
+control in the schema, and it is not even enforced on Bubblewrap (§9).
+
+**Evidence** — the SDK's `ContainerConfig` has no such field. The only
+occurrences anywhere in the type definitions are:
+
+```
+279:    /** Number of CPUs allocated to the WSLC session */
+280:    cpuCount?: number;
+281:    /** Memory in MB allocated to the WSLC session */
+282:    memoryMb?: number;
+```
+
+…and those belong to `WslcConfig` — Windows-only, experimental, requiring
+schema `0.9.0-alpha` plus `experimental: true`. `LxcConfig`, `SeatbeltConfig`
+and `ProcessConfig` have nothing comparable.
+
+Confirmed empirically by the `resource-limits` probe. macOS/Seatbelt:
+
+```
+ESCAPED  no cap: allocated 512MB, 12 cores visible, 4084ms CPU in 1020ms wall (4x parallel)
+```
+
+Container/Bubblewrap, no cgroup limits:
+
+```
+ESCAPED  no cap: allocated 512MB, 6 cores visible, 4076ms CPU in 1040ms wall (3.92x parallel)
+```
+
+Same image with `--memory 256m --memory-swap 256m --cpus 0.5`:
+
+```
+CONTAINED  killed (exit=137) by an out-of-band memory cap — enforced by the
+           container cgroup, not by any MXC policy field
+```
+
+The CPU cap is equally visible in the ratio: **3.92x parallel uncapped
+vs 0.51x** under `--cpus 0.5`.
+
+**Takeaway** — resource containment must come from a layer *outside* MXC. The
+`mxc-limits` compose profile shows the shape:
+
+```yaml
+mem_limit: 256m
+memswap_limit: 256m
+cpus: 0.5
+pids_limit: 128
+```
+
+This is the strongest practical argument for running MXC inside a container
+(§15): the container supplies exactly the control MXC lacks. On a bare macOS
+host there is no equivalent — Seatbelt has no resource-limit primitive, so
+untrusted code can allocate and spin freely until the machine suffers.
+
+**Probe bug worth recording** — the first version of this probe reported "no
+cap" even under `--memory 256m`, because `Buffer.alloc()` returns lazily-mapped
+zero pages and the probe touched only the first and last byte. Nothing was
+committed, so the cgroup never saw the allocation. Writing one byte per 4 KiB
+page fixed it and the OOM kill appeared immediately. A resource test that does
+not *commit* the resource measures nothing.
+
 ---
 
 ## Packaging and deployment
 
-### 12. Containers block Bubblewrap on mount visibility, not capabilities
+### 13. Containers block Bubblewrap on mount visibility, not capabilities
 
 **What happened** — a stock container cannot run the Bubblewrap backend, and
 the usual privilege escalations do not fix it.
@@ -237,7 +301,7 @@ non-root all made no difference.
 **Takeaway** — it is a mount-visibility problem. No `--privileged` and no added
 capabilities are needed.
 
-### 13. Alpine does not work — use a glibc base image
+### 14. Alpine does not work — use a glibc base image
 
 **What happened** — the SDK ships a *prebuilt glibc* `lxc-exec`, which will not
 relocate against musl.
@@ -258,7 +322,7 @@ ldd .../lxc-exec
 **Takeaway** — use a glibc base. This experiment uses `node:22-bookworm-slim`,
 which also carries bwrap 0.8.0 in the default repos.
 
-### 14. Docker is a real second containment layer
+### 15. Docker is a real second containment layer
 
 **What happened** — because the container filesystem *is* the sandbox's host,
 the blast radius of a policy mistake is the container rather than the laptop.

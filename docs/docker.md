@@ -13,6 +13,9 @@ docker compose run --rm mxc-stock
 
 # Works — but grants far more than MXC needs
 docker compose run --rm mxc-privileged
+
+# Adds the CPU/memory caps MXC itself cannot express
+docker compose run --rm mxc-limits
 ```
 
 ## Minimum requirements
@@ -20,7 +23,7 @@ docker compose run --rm mxc-privileged
 **In the image**
 
 - a **glibc** base — the SDK ships a prebuilt glibc `lxc-exec`, and Alpine
-  fails even with `gcompat` ([findings.md](./findings.md) §13)
+  fails even with `gcompat` ([findings.md](./findings.md) §14)
 - `bubblewrap` ≥ 0.5.0 (bookworm ships 0.8.0)
 - Node ≥ 18
 
@@ -200,6 +203,35 @@ The `mxc-stock` profile aborts honestly instead of faking passes:
 
 The baseline scenario could not start a sandbox — aborting.
 ```
+
+## Resource limits
+
+MXC has no CPU, memory or process-count field on any cross-platform backend
+([findings.md](./findings.md) §12), so the container is the only place to
+enforce them. The `mxc-limits` profile:
+
+```yaml
+mem_limit: 256m
+memswap_limit: 256m
+cpus: 0.5
+pids_limit: 128
+```
+
+Uncapped, a sandboxed workload does as it pleases:
+
+```
+ESCAPED  no cap: allocated 512MB, 6 cores visible, 4076ms CPU in 1040ms wall (3.92x parallel)
+```
+
+Under `mxc-limits` the cgroup does what MXC cannot:
+
+```
+CONTAINED  killed (exit=137) by an out-of-band memory cap — enforced by the
+           container cgroup, not by any MXC policy field
+```
+
+The CPU cap shows up in the parallelism ratio: **3.92x uncapped vs 0.51x**
+under `cpus: 0.5`.
 
 ## Build behind a proxy
 

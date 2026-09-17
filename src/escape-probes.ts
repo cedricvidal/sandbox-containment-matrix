@@ -305,6 +305,98 @@ const probes: Probe[] = [
       };
     },
   },
+  {
+    name: 'resource-limits',
+    threat: 'exhaust CPU and memory — MXC expresses no cgroup-style limits',
+    run: async () => {
+      // Deliberately modest budgets: this documents that no cap exists, it is
+      // not a stress test of the developer's machine.
+      const MB = 512;
+      const SPIN_MS = 1000;
+      const WORKERS = 4;
+
+      // Written to a file rather than passed via `node -e`: commandLine is run
+      // through `sh -c`, so an inline script full of quotes and parentheses
+      // gets mangled by the shell.
+      const scriptPath = path.join(TEMP_DIR, `mxc-resource-probe-${process.pid}.cjs`);
+      const script = `
+const os = require('os');
+const { Worker } = require('worker_threads');
+let mem = 'none';
+try {
+  const b = Buffer.alloc(${MB} * 1024 * 1024);
+  // Touch every page: a large Buffer.alloc gets lazily-mapped zero pages, so
+  // without this the memory is never committed and any cgroup cap is missed.
+  for (let i = 0; i < b.length; i += 4096) b[i] = 1;
+  mem = '${MB}MB';
+} catch (e) { mem = 'denied:' + e.code; }
+const t0 = Date.now();
+const c0 = process.cpuUsage();
+const src = 'const e = Date.now() + ${SPIN_MS}; while (Date.now() < e) { Math.sqrt(Math.random()); }';
+const ws = Array.from({ length: ${WORKERS} }, () => new Worker(src, { eval: true }));
+Promise.all(ws.map((w) => new Promise((r) => w.on('exit', r)))).then(() => {
+  const wall = Date.now() - t0;
+  const c = process.cpuUsage(c0);
+  const cpuMs = Math.round((c.user + c.system) / 1000);
+  console.log(JSON.stringify({ mem, cores: os.cpus().length, wall, cpuMs, ratio: +(cpuMs / wall).toFixed(2) }));
+});
+`;
+      await fs.writeFile(scriptPath, script);
+      try {
+        const r = await runInSandbox({
+          commandLine: `${NODE} ${scriptPath}`,
+          timeoutMs: 60_000,
+        });
+
+        const failure = r.stderr.match(/^\s*(bwrap|lxc-exec|mxc-exec[\w-]*):\s*(.+)$/m);
+        if (failure) {
+          return { verdict: 'inconclusive', detail: `sandbox did not start: ${failure[0].trim()}` };
+        }
+
+        // An out-of-band cap (cgroup memory limit) kills the process outright.
+        // That is real containment — just not MXC's doing.
+        if (r.exitCode === 137 || /\bKilled\b|out of memory/i.test(r.stderr)) {
+          return {
+            verdict: 'contained',
+            detail:
+              'killed (exit=137) by an out-of-band memory cap — enforced by the ' +
+              'container cgroup, not by any MXC policy field',
+          };
+        }
+
+        let parsed: { mem: string; cores: number; cpuMs: number; wall: number; ratio: number };
+        try {
+          parsed = JSON.parse(r.stdout.trim().split('\n').pop() ?? '');
+        } catch {
+          return {
+            verdict: 'inconclusive',
+            detail: `could not parse output (exit=${r.exitCode}): ${r.stderr.trim().slice(0, 140)}`,
+          };
+        }
+
+        const memUncapped = parsed.mem === `${MB}MB`;
+        // ratio > 1 means more CPU-seconds burned than wall-seconds elapsed,
+        // i.e. the sandbox ran on more than one core simultaneously.
+        const cpuUncapped = parsed.ratio > 1.5;
+
+        if (memUncapped || cpuUncapped) {
+          return {
+            verdict: 'ESCAPED',
+            detail:
+              `no cap: allocated ${parsed.mem}, ${parsed.cores} cores visible, ` +
+              `${parsed.cpuMs}ms CPU in ${parsed.wall}ms wall (${parsed.ratio}x parallel). ` +
+              `MXC has no CPU/memory field — cap it with cgroups instead`,
+          };
+        }
+        return {
+          verdict: 'contained',
+          detail: `mem=${parsed.mem}, cpu ratio=${parsed.ratio}x, ${parsed.cores} cores visible`,
+        };
+      } finally {
+        await fs.rm(scriptPath, { force: true });
+      }
+    },
+  },
 ];
 
 async function main(): Promise<void> {

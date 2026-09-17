@@ -42,9 +42,15 @@ baseline aborts the run (see [findings.md](./findings.md) §7).
 | `home-dir-read` | read an ungranted file in `$HOME` | contained | contained |
 | `network-allowlist` | allow one site, deny the rest — then reach another | **unsupported** | contained |
 | `timeout-enforced` | ignore `timeoutMs` and run forever | contained | **ESCAPED** |
+| `resource-limits` | exhaust CPU and memory | **ESCAPED** | **ESCAPED**¹ |
 
-Totals: Seatbelt `7/8 contained, 0 escaped, 1 unsupported`; Bubblewrap
-`7/8 contained, 1 escaped, 0 unsupported`.
+¹ Contained only when the *container* supplies a cgroup cap — see the
+`mxc-limits` compose profile. MXC itself has no CPU/memory field on any
+cross-platform backend ([findings.md](./findings.md) §12).
+
+Totals: Seatbelt `7/9 contained, 1 escaped, 1 unsupported`; Bubblewrap
+`7/9 contained, 2 escaped, 0 unsupported` — or `8/9 contained, 1 escaped`
+when run under `mxc-limits`.
 
 `unsupported` is tallied separately from `contained` on purpose — "this backend
 cannot express the control you asked for" is not "the control held".
@@ -56,9 +62,14 @@ cannot express the control you asked for" is not "the control held".
   the sandbox once the container's own profile is removed
   ([findings.md](./findings.md) §10). The entire syscall ABI is reachable, so a
   kernel LPE walks straight out.
-- **Resource exhaustion.** Wall-clock `timeoutMs` is the only limit expressed,
-  and it is not enforced on Bubblewrap ([findings.md](./findings.md) §9).
-  Nothing caps CPU, memory, disk, or process count.
+- **Resource exhaustion — by MXC.** Wall-clock `timeoutMs` is the only limit
+  the schema expresses, and it is not enforced on Bubblewrap
+  ([findings.md](./findings.md) §9). There is no CPU, memory or process-count
+  field at all ([findings.md](./findings.md) §12): a sandboxed workload
+  allocated 512 MB and saturated 4 cores on both backends. This is delegable —
+  a container cgroup (`mem_limit`, `cpus`, `pids_limit`) enforces it, and the
+  `mxc-limits` profile demonstrates the OOM kill landing. On a bare macOS host
+  there is no equivalent.
 - **Whatever you grant.** `readwritePaths` is a hole by construction, and
   `getAvailableToolsPolicy()` grants *every* `PATH` entry read-only — about 30
   directories on this Mac, including `~/.cargo/bin`, `~/.local/bin` and `~/bin`.
@@ -79,3 +90,6 @@ Two findings matter more than the rest when deciding whether to rely on this:
    while landing in a throwaway namespace ([findings.md](./findings.md) §8).
    Assert on disclosure and on host-side effects, never on the child's exit
    code alone.
+3. **Nothing in MXC stops a workload burning the machine's CPU and RAM**
+   ([findings.md](./findings.md) §12). If the workload is genuinely untrusted,
+   run it under a cgroup.
