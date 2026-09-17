@@ -8,19 +8,25 @@
  *
  * Run with: pnpm probes
  */
+import dns from 'node:dns/promises';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getTemporaryFilesPolicy } from '@microsoft/mxc-sdk';
+import {
+  createConfigFromPolicy,
+  getAvailableToolsPolicy,
+  getTemporaryFilesPolicy,
+  spawnSandboxFromConfig,
+} from '@microsoft/mxc-sdk';
 import { assertMxcSupported, describePlatformSupport, runInSandbox } from './mxc-utils.js';
 
 const NODE = process.execPath;
 const TEMP_DIR = getTemporaryFilesPolicy().readwritePaths[0] ?? os.tmpdir();
 const SECRET = 'TOP-SECRET-CANARY';
 
-type Verdict = 'contained' | 'ESCAPED' | 'inconclusive';
+type Verdict = 'contained' | 'ESCAPED' | 'unsupported' | 'inconclusive';
 
 interface Probe {
   name: string;
@@ -180,6 +186,125 @@ const probes: Probe[] = [
       }
     },
   },
+  {
+    name: 'network-allowlist',
+    threat: 'block the internet except one site, then reach a different site anyway',
+    run: async () => {
+      // Rules must be IP literals or CIDRs — MXC rejects DNS names rather than
+      // resolving them, because the sandbox resolves names itself and could be
+      // handed an address the rules never authorised. So resolve here, and have
+      // the sandbox connect by IP over plain HTTP: no DNS dependency inside the
+      // sandbox, and no TLS certificate mismatch from an IP-literal URL.
+      const [allowedIp] = await dns.resolve4('example.com');
+      const [blockedIp] = await dns.resolve4('www.iana.org');
+      if (!allowedIp || !blockedIp || allowedIp === blockedIp) {
+        return { verdict: 'inconclusive', detail: 'could not resolve two distinct test IPs' };
+      }
+
+      const reach = (ip: string, hostHeader: string) => {
+        const script =
+          `fetch('http://${ip}/',{headers:{host:'${hostHeader}'},signal:AbortSignal.timeout(8000)})` +
+          `.then(r=>console.log('HTTP',r.status)).catch(e=>{console.error('blocked:',e.message);process.exit(7)})`;
+        return `${NODE} -e "${script}"`;
+      };
+
+      const buildAllowlistConfig = (commandLine: string) => {
+        const tools = getAvailableToolsPolicy(process.env);
+        const temp = getTemporaryFilesPolicy();
+        // Schema 0.8 directional networking: default-deny egress with a single
+        // allow rule. Legacy allowOutbound must not be mixed with this shape.
+        const config = createConfigFromPolicy(
+          {
+            version: '0.8.0-alpha',
+            filesystem: {
+              readonlyPaths: tools.readonlyPaths,
+              readwritePaths: temp.readwritePaths,
+            },
+            network: {
+              egress: {
+                default: 'deny',
+                allow: [
+                  {
+                    to: [{ cidr: `${allowedIp}/32` }],
+                    ports: [{ protocol: 'tcp', port: 80 }],
+                  },
+                ],
+              },
+              ingress: { default: 'deny', hostLoopback: 'deny' },
+            },
+            timeoutMs: 20_000,
+          },
+          'process',
+        );
+        config.process!.commandLine = commandLine;
+        return config;
+      };
+
+      const run = (commandLine: string) =>
+        new Promise<{ stdout: string; stderr: string; exitCode: number | null }>(
+          (resolve, reject) => {
+            let child;
+            try {
+              child = spawnSandboxFromConfig(buildAllowlistConfig(commandLine), { usePty: false });
+            } catch (error) {
+              reject(error);
+              return;
+            }
+            let stdout = '';
+            let stderr = '';
+            child.stdout?.on('data', (c: Buffer) => (stdout += c.toString()));
+            child.stderr?.on('data', (c: Buffer) => (stderr += c.toString()));
+            child.on('error', reject);
+            child.on('close', (exitCode: number | null) => resolve({ stdout, stderr, exitCode }));
+          },
+        );
+
+      let allowed;
+      try {
+        allowed = await run(reach(allowedIp, 'example.com'));
+      } catch (error) {
+        // Seatbelt declares no EGRESS_RULES capability and rejects the policy
+        // outright rather than silently ignoring it — the honest failure mode.
+        return {
+          verdict: 'unsupported',
+          detail: `backend rejected per-CIDR egress rules: ${(error as Error).message.split('\n')[0]}`,
+        };
+      }
+
+      const rejected = /not supported|unsupported|rejected|EGRESS_RULES|capability/i.test(
+        allowed.stderr,
+      );
+      if (rejected && allowed.exitCode !== 0) {
+        return {
+          verdict: 'unsupported',
+          detail: `backend rejected per-CIDR egress rules: ${allowed.stderr.trim().split('\n')[0]}`,
+        };
+      }
+
+      const blocked = await run(reach(blockedIp, 'www.iana.org'));
+      const reachedAllowed = allowed.stdout.includes('HTTP');
+      const reachedBlocked = blocked.stdout.includes('HTTP');
+
+      if (reachedBlocked) {
+        return {
+          verdict: 'ESCAPED',
+          detail: `reached ${blockedIp} despite an allowlist naming only ${allowedIp}`,
+        };
+      }
+      if (!reachedAllowed) {
+        return {
+          verdict: 'inconclusive',
+          detail:
+            `the allowlisted host ${allowedIp} was also unreachable ` +
+            `(exit=${allowed.exitCode}) — default-deny may simply block everything`,
+        };
+      }
+      return {
+        verdict: 'contained',
+        detail: `allowlisted ${allowedIp} reachable, ${blockedIp} blocked (exit=${blocked.exitCode})`,
+      };
+    },
+  },
 ];
 
 async function main(): Promise<void> {
@@ -193,18 +318,26 @@ async function main(): Promise<void> {
   assertMxcSupported();
 
   let escaped = 0;
+  let unsupported = 0;
   for (const probe of probes) {
     process.stdout.write(`\n--- ${probe.name}: ${probe.threat}\n`);
     try {
       const { verdict, detail } = await probe.run();
       if (verdict === 'ESCAPED') escaped += 1;
+      if (verdict === 'unsupported') unsupported += 1;
       console.log(`  ${verdict.toUpperCase()}  ${detail}`);
     } catch (error) {
       console.log(`  INCONCLUSIVE  threw: ${(error as Error).message}`);
     }
   }
 
-  console.log(`\n=== ${probes.length - escaped}/${probes.length} probes contained ===`);
+  // An unsupported control is not a contained one — it means the policy you
+  // asked for cannot be expressed on this backend at all.
+  const enforced = probes.length - escaped - unsupported;
+  console.log(
+    `\n=== ${enforced}/${probes.length} probes contained, ` +
+      `${escaped} escaped, ${unsupported} unsupported by this backend ===`,
+  );
 }
 
 main().catch((error) => {

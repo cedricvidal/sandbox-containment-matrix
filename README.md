@@ -177,7 +177,11 @@ where everything fails would look like a perfect score.
 | `loopback-egress` | reach a host service on 127.0.0.1 under `allowOutbound: false` | contained | contained |
 | `signal-host-process` | signal/inspect a process outside the sandbox | contained | contained |
 | `home-dir-read` | read an ungranted file in `$HOME` | contained | contained |
+| `network-allowlist` | allow one site, deny the rest — then reach another site | **unsupported** | contained |
 | `timeout-enforced` | ignore `timeoutMs` and run forever | contained | **ESCAPED** |
+
+`unsupported` is tallied separately from `contained`, because "the backend
+cannot express this control" is not "the control held".
 
 ### Explicitly *not* covered
 
@@ -197,8 +201,6 @@ where everything fails would look like a perfect score.
   a plausible persistence point. Narrow this for real workloads.
 - **TOCTOU** on granted paths, and side channels of every kind.
 - **Windows `processcontainer`** — not tested here at all.
-- **Schema 0.8 directional networking** — `allowOutbound` is binary in this
-  experiment; per-host/CIDR rules are untested.
 
 ### And the disclaimer that dominates all of the above
 
@@ -295,6 +297,29 @@ Things the upstream sample does not spell out, learned the hard way here:
     own seccomp disabled, a sandboxed process reports `Seccomp: 0` and
     `Seccomp_filters: 0`. MXC here is a filesystem and namespace boundary, not
     a syscall boundary — the full kernel attack surface stays exposed.
+
+14. **"Allow only this one site" is Linux-only.** The `network-allowlist` probe
+    asks for schema 0.8 default-deny egress with a single `/32` + `tcp/80`
+    allow rule:
+    - **Seatbelt rejects it up front**: `network.egress allow/deny rules are
+      not supported by the selected backend`. macOS has no packet-filter
+      primitive — Seatbelt's `(remote ...)` accepts only `*` and `localhost`,
+      so outbound is an on/off switch plus a loopback exception. Good failure
+      mode though: it fails closed at config time rather than quietly ignoring
+      the rule you asked for.
+    - **Bubblewrap enforces it**, but needs `/dev/net/tun` in the container for
+      slirp4netns to build the private netns. Without it you get
+      `open("/dev/net/tun"): No such file or directory` and *everything* is
+      blocked — again failing closed, never falling back to an open network.
+
+    Rules take IP literals/CIDRs only; DNS names are rejected at validation
+    rather than resolved, since the sandbox resolves names itself and could
+    otherwise be handed an address the rules never authorised. So the probe
+    resolves on the host and connects by IP over plain HTTP — no DNS inside the
+    sandbox, and no cert mismatch from an IP-literal HTTPS URL. If you need
+    hostname allowlisting, that's a proxy's job (`runtimeConfig.networkProxy`),
+    and MXC only confines egress *to* the proxy — actually speaking HTTP to it
+    is cooperative, not enforced.
 
 ## Files
 

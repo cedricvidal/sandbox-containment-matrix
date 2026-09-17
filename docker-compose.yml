@@ -20,6 +20,11 @@ x-mxc-base: &mxc-base
       NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
   image: sandbox-mxc-sdk-typescript:latest
   init: true
+  devices:
+    # slirp4netns needs /dev/net/tun to build the private network namespace
+    # that schema 0.8 per-CIDR egress rules are enforced in. Without it those
+    # policies fail closed: `open("/dev/net/tun"): No such file or directory`.
+    - /dev/net/tun
 
 services:
   # Minimum that lets bwrap build its namespace. Notably NOT privileged and with
