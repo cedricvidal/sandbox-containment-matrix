@@ -92,6 +92,7 @@ pnpm probe   # what backends/paths does this host expose?
 pnpm hello   # the upstream README sample, adapted to run
 pnpm dev     # policy conformance suite (exit 0 = all as expected)
 pnpm probes  # adversarial probes: try to escape the sandbox
+pnpm latency # is the trusted side starved while the sandbox saturates CPU?
 ```
 
 In a container (Linux/bubblewrap) — see [docs/docker.md](./docs/docker.md):
@@ -143,6 +144,9 @@ the most time:
 7. **No CPU or memory limits exist in MXC** — a sandboxed workload committed
    512 MB and obtained ~10 of 12 cores on macOS. Cap it with a container
    cgroup; the `mxc-limits` compose profile shows the shape.
+8. **A container-wide `cpus:` quota starves the orchestrator too** — the
+   trusted side lost 60% of its service ticks under `--cpus 1`. Bound CPU with
+   `cpuset` and reserve a core (`mxc-reserved`) instead.
 
 ## Files
 
@@ -154,7 +158,8 @@ the most time:
 | `src/hello-sandbox.ts` | upstream README sample, adapted |
 | `src/platform-probe.ts` | dumps backends and discovered policy paths |
 | `Dockerfile` | Debian + bubblewrap + pnpm image |
-| `docker-compose.yml` | four profiles: minimal, resource-capped, stock (fails), privileged |
+| `src/trusted-latency.ts` | trusted-side responsiveness under sandboxed CPU load |
+| `docker-compose.yml` | five profiles: minimal, resource-capped, core-reserved, stock (fails), privileged |
 | `docs/` | findings log, threat model, backend comparison, Docker guide |
 
 ## References

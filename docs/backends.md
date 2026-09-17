@@ -57,8 +57,9 @@ The last one is only safe *because* the suite now treats a launch failure as
   choice is all-or-nothing outbound plus a loopback exception; anything finer
   needs a proxy, and using the proxy is cooperative rather than enforced.
 - **Cap CPU and memory outside MXC.** Neither backend has a field for it. In a
-  container use `mem_limit` / `cpus` / `pids_limit` (the `mxc-limits` compose
-  profile); on bare macOS there is no equivalent.
+  container use `mem_limit` / `pids_limit`, and bound CPU with `cpuset` plus a
+  reserved core (`mxc-reserved`) rather than a shared `cpus:` quota, which
+  throttles the orchestrator too. On bare macOS there is no equivalent.
 - **Smoke-test at startup on every platform.** `getPlatformSupport()` returning
   `isSupported: true` has been wrong in two distinct environments
   ([findings.md](./findings.md) §7).

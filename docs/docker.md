@@ -16,6 +16,9 @@ docker compose run --rm mxc-privileged
 
 # Adds the CPU/memory caps MXC itself cannot express
 docker compose run --rm mxc-limits
+
+# Caps the workload WITHOUT starving the orchestrator (preferred)
+docker compose run --rm mxc-reserved
 ```
 
 ## Minimum requirements
@@ -291,6 +294,21 @@ With only a CPU quota applied, the probe reports the measured allowance, which
 tracks the configured value closely: `--cpus 0.5` → `~0.5 of 6 cores demanded`,
 `--cpus 2` → `~2.03 of 6`, `--cpus 4` → `~3.98 of 6`. See
 [findings.md](./findings.md) §12 for how the measurement works.
+
+### Keeping the trusted side responsive
+
+A `cpus:` quota is shared by everything in the container, so capping it
+throttles the orchestrator alongside the workload. Measured with `pnpm latency`
+under `--cpus 1`, the trusted side's 20ms service loses 60% of its ticks; with
+`cpuset` plus a reserved core it loses none:
+
+| Configuration | trusted work vs idle | ticks served |
+|---|---|---|
+| `cpus: 1` (shared quota) | 5.3x slower | 40% |
+| `cpuset: 0-3` + `reserveHostCpu` | 1.0x — unaffected | 97% |
+
+The `mxc-reserved` profile is the working shape; see
+[findings.md](./findings.md) §16.
 
 ## Build behind a proxy
 

@@ -50,6 +50,23 @@ services:
     cpus: 0.5
     pids_limit: 128
 
+  # Bounds the untrusted side WITHOUT suffocating the trusted one.
+  #
+  # cpuset_cpus bounds total CPU by hardware rather than by quota, and the
+  # sandbox is pinned away from the first CPU (runInSandbox's reserveHostCpu),
+  # leaving it for the orchestrator. Unlike `cpus:`, a cgroup quota that
+  # throttles both sides alike, this discriminates between them.
+  # See docs/findings.md §16.
+  mxc-reserved:
+    <<: *mxc-base
+    security_opt:
+      - label=disable
+      - unmask=ALL
+    cpuset: "0-3"
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 256
+
   # Stock container hardening — kept to demonstrate the failure mode.
   mxc-stock:
     <<: *mxc-base

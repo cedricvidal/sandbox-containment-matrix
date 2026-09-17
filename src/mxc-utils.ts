@@ -6,6 +6,8 @@
  * `SandboxPolicy` surface so the same scenarios run everywhere MXC is
  * supported.
  */
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import {
   createConfigFromPolicy,
   getAvailableToolsPolicy,
@@ -23,6 +25,16 @@ import {
 export const SCHEMA_VERSION = '0.7.0-alpha' as const;
 
 export interface SandboxRunOptions {
+  /**
+   * Confine the sandboxed process to every CPU except the first one this
+   * process is allowed on, reserving that CPU for the trusted side.
+   *
+   * MXC has no CPU control of its own, and a container-wide cgroup quota
+   * throttles the orchestrator just as hard as the workload. CPU affinity is
+   * the one mechanism that discriminates between the two, and it needs no
+   * cgroup delegation. Linux only; ignored elsewhere.
+   */
+  reserveHostCpu?: boolean;
   /** Command executed inside the sandbox. */
   commandLine: string;
   /** Allow outbound network access. Defaults to `false` (deny). */
@@ -75,6 +87,45 @@ export function describePlatformSupport(): string {
 }
 
 /**
+ * CPUs this process may run on, from `Cpus_allowed_list`. `os.cpus()` reports
+ * every host core regardless of the container's cpuset, so it is the wrong
+ * input for pinning.
+ */
+export function allowedCpus(): number[] {
+  if (process.platform !== 'linux') return [];
+  try {
+    const line = /^Cpus_allowed_list:\s*(.+)$/m
+      .exec(readFileSync('/proc/self/status', 'utf8'))?.[1]
+      ?.trim();
+    if (!line) return [];
+    const cpus: number[] = [];
+    for (const part of line.split(',')) {
+      const [lo, hi] = part.split('-').map((n) => Number.parseInt(n, 10));
+      for (let i = lo; i <= (Number.isNaN(hi) ? lo : hi); i += 1) cpus.push(i);
+    }
+    return cpus;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Command prefix confining a child to every allowed CPU but the first.
+ * Returns '' when that is impossible (non-Linux, no `taskset`, or a single
+ * allowed CPU — you cannot reserve the only core you have).
+ */
+export function reserveHostCpuPrefix(): string {
+  const cpus = allowedCpus();
+  if (cpus.length < 2) return '';
+  try {
+    execFileSync('taskset', ['--version'], { stdio: 'ignore' });
+  } catch {
+    return '';
+  }
+  return `taskset -c ${cpus.slice(1).join(',')} `;
+}
+
+/**
  * Builds a least-privilege policy: host toolchain paths mounted read-only, the
  * temp directory read-write, network denied unless explicitly opted in.
  */
@@ -95,7 +146,8 @@ export function buildConfig(options: SandboxRunOptions) {
     'process',
   );
 
-  config.process!.commandLine = options.commandLine;
+  const prefix = options.reserveHostCpu ? reserveHostCpuPrefix() : '';
+  config.process!.commandLine = `${prefix}${options.commandLine}`;
   return config;
 }
 

@@ -369,3 +369,76 @@ the blast radius of a policy mistake is the container rather than the laptop.
 **Takeaway** — given that upstream does not treat MXC profiles as security
 boundaries yet, running MXC inside a container is the more defensible posture
 today. The two layers fail independently.
+
+### 16. A container-wide CPU cap suffocates the trusted side too
+
+**What happened** — §12 concluded "cap it with cgroups", and the `mxc-limits`
+profile did exactly that with `cpus: 0.5`. Measuring the *orchestrator's* own
+responsiveness while a sandboxed hog runs shows that advice was incomplete: a
+cgroup quota applies to the whole container, so it throttles the trusted
+process just as hard as the untrusted one.
+
+**How it is measured** — `pnpm latency` (`src/trusted-latency.ts`) runs a
+trusted-side "service" — a 20ms timer that performs 5ms of real SHA-256 work
+each tick — and reports event-loop delay, how many ticks were served, and how
+much that fixed 5ms slice stretched, while a sandboxed hog saturates every
+visible core. Measuring an idle event loop would prove nothing: an
+orchestrator merely awaiting a child needs almost no CPU and never looks
+starved, which is why the first version of this test showed no effect at all.
+
+**Evidence** — container held to one CPU by quota (`--cpus 1`):
+
+```
+  scenario        loop p99  work p99  stretch  served
+  idle              21.2ms    18.0ms     3.6x     97%
+  hog              111.0ms    95.6ms    19.1x     40%
+  hog + nice 19    110.3ms   104.6ms    20.9x     39%
+  hog + affinity   105.6ms   102.7ms    20.5x     54%
+```
+
+The trusted service loses **60% of its ticks**. Neither `nice 19` nor CPU
+affinity rescues it, because CFS bandwidth control throttles the entire cgroup
+once the quota is spent — during a throttled period nothing in the group runs,
+whatever its priority.
+
+With the same hog but no quota, the trusted side is untouched (`100%` served):
+Linux already favours a low-demand task over six spinners. **The quota, not the
+hog, was doing the damage.**
+
+**What works** — bound the untrusted side by *hardware* and reserve a CPU for
+the trusted one. Under `cpuset: "0-3"`, with the sandbox pinned to CPUs 1-3:
+
+```
+  scenario        loop p99  work p99  stretch  served
+  idle              18.8ms    17.5ms     3.5x     97%
+  hog + affinity    11.6ms     7.5ms     1.5x     97%
+```
+
+The trusted side's work is **as fast as when idle** while the sandbox saturates
+three cores, and total CPU is still bounded to four.
+
+```mermaid
+flowchart TB
+  subgraph BAD["cpus: 0.5 — one quota, shared"]
+    direction TB
+    Q["cgroup cpu.max<br/>throttles the whole group"]
+    T1["trusted<br/>40% of ticks served"]
+    U1["untrusted hog"]
+    Q --> T1
+    Q --> U1
+  end
+
+  subgraph GOOD["cpuset: 0-3 + reserveHostCpu — bounded, and separated"]
+    direction TB
+    C0["CPU 0<br/>trusted only<br/>97% of ticks served"]
+    C13["CPUs 1-3<br/>untrusted hog"]
+  end
+```
+
+**Takeaway** — use `cpuset` to bound total CPU and pin the sandbox off the
+reserved core, rather than a `cpus:` quota that both sides share. The
+`mxc-reserved` compose profile is the working configuration, and
+`runInSandbox({ reserveHostCpu: true })` applies the pin — it reads
+`Cpus_allowed_list` rather than `os.cpus()`, since the latter reports every
+host core regardless of the container's cpuset. Keep `mem_limit`: memory is a
+hard failure (OOM kill), and there the container-wide cap is the right tool.

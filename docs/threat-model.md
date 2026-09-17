@@ -70,7 +70,10 @@ cannot express the control you asked for" is not "the control held".
   container. This is delegable —
   a container cgroup (`mem_limit`, `cpus`, `pids_limit`) enforces it, and the
   `mxc-limits` profile demonstrates the OOM kill landing. On a bare macOS host
-  there is no equivalent.
+  there is no equivalent. Note that *how* the CPU limit is expressed matters:
+  a container-wide `cpus:` quota starves the trusted orchestrator alongside the
+  workload ([findings.md](./findings.md) §16); use `cpuset` plus
+  `reserveHostCpu` to bound the sandbox while reserving a core.
 - **Whatever you grant.** `readwritePaths` is a hole by construction, and
   `getAvailableToolsPolicy()` grants *every* `PATH` entry read-only — about 30
   directories on this Mac, including `~/.cargo/bin`, `~/.local/bin` and `~/bin`.
@@ -93,4 +96,6 @@ Two findings matter more than the rest when deciding whether to rely on this:
    code alone.
 3. **Nothing in MXC stops a workload burning the machine's CPU and RAM**
    ([findings.md](./findings.md) §12). If the workload is genuinely untrusted,
-   run it under a cgroup.
+   run it under a cgroup — but bound CPU with `cpuset` and a reserved core, not
+   a shared quota, or the orchestrator starves with it
+   ([findings.md](./findings.md) §16).
