@@ -23,13 +23,18 @@ enforces it — it is a self-checking probe, not just a demo.
 |----------|-------------|
 | `hello-world` | a trivial command runs inside the sandbox |
 | `fs-write-allowed` | writing into `readwritePaths` succeeds |
-| `fs-write-denied` | writing anywhere else fails with `EPERM` |
-| `fs-read-denied` | reading `~/.ssh` fails with `EPERM` |
+| `fs-write-contained` | a write outside `readwritePaths` never reaches the host |
+| `fs-read-denied` | reading `~/.ssh` fails (skipped if absent) |
 | `net-denied` | `fetch()` fails with `allowOutbound: false` |
 | `net-allowed` | `fetch()` returns `HTTP 200` when the policy opts in |
-| `extra-path-denied` | a host dir absent from the policy is unreadable |
+| `extra-path-denied` | a host dir absent from the policy discloses nothing |
 | `extra-path-granted` | the same dir is readable once added to `readonlyPaths` |
 | `readonly-stays-readonly` | a `readonlyPaths` grant still refuses writes |
+
+A scenario whose sandbox never launched is reported as `ERROR`, never `PASS` —
+otherwise every "denied" expectation would pass for the wrong reason on a host
+where MXC is broken. If the baseline `hello-world` cannot start, the suite
+aborts with exit code 3 instead of printing a wall of meaningless passes.
 
 ## Architecture
 
@@ -89,7 +94,65 @@ backends  : seatbelt
   PASS  exit=0
       HTTP 200
 
-=== 9/9 scenarios behaved as expected ===
+=== 9 passed, 0 failed, 0 errored, 0 skipped ===
+```
+
+## Running in Docker
+
+On Linux, MXC uses the **`bubblewrap`** backend, which builds its sandbox from
+user namespaces and mount operations. Container runtimes restrict exactly those
+operations, so a stock container cannot run it.
+
+```bash
+# Works — minimum viable configuration
+docker compose run --rm mxc
+
+# Fails — stock container hardening, kept to show the failure mode
+docker compose run --rm mxc-stock
+
+# Works — but grants far more than MXC needs
+docker compose run --rm mxc-privileged
+```
+
+`mxc` is **not privileged and adds no capabilities**. It needs exactly two
+`security_opt` entries, each fixing a distinct failure found by bisecting:
+
+| Option | Failure it fixes |
+|--------|------------------|
+| `label=disable` | `bwrap: Can't mount devpts on /newroot/dev/pts: Permission denied` — SELinux denies the devpts mount |
+| `unmask=ALL` | `bwrap: Can't mount proc on /newroot/proc: Operation not permitted` — the runtime masks parts of `/proc`, and the kernel refuses a nested `proc` mount unless a fully visible instance exists |
+
+Things that did **not** help: `--cap-add SYS_ADMIN`, `--cap-add ALL`,
+`seccomp=unconfined`, `apparmor=unconfined`, or running as a non-root user.
+This is a mount-visibility problem, not a capability or syscall-filter one.
+`unmask=ALL` is Podman syntax; on Docker Engine the nearest equivalent is
+`--security-opt systempaths=unconfined` (which this Podman host accepted but
+did not honour, so it still failed here).
+
+Container result — Debian bookworm, bwrap 0.8.0, arm64:
+
+```
+host      : linux/arm64
+supported : true
+backends  : bubblewrap
+
+--- fs-write-contained: a write outside readwritePaths never reaches the host
+  PASS  write redirected into the sandbox (exit=0); host file absent
+
+--- fs-read-denied: reading sensitive host paths (~/.ssh) is refused
+  SKIP  /root/.ssh does not exist on this host
+
+--- readonly-stays-readonly: a readonlyPaths grant does not allow writes ...
+  PASS  exit=1
+      Error: EROFS: read-only file system, open '/app/.fixture-tQivdO/tampered.txt'
+
+=== 8 passed, 0 failed, 0 errored, 1 skipped ===
+```
+
+If npmjs.org is unreachable from your build network, pass a registry:
+
+```bash
+docker compose build --build-arg NPM_REGISTRY=https://your-proxy/npm/ mxc
 ```
 
 ## Findings
@@ -129,6 +192,31 @@ Things the upstream sample does not spell out, learned the hard way here:
    returns a `ChildProcess` with separated `stdout`/`stderr` and a reliable exit
    code; PTY mode merges the streams.
 
+7. **`getPlatformSupport()` is optimistic in a container.** Inside stock Docker
+   it reported `supported: true, backends: bubblewrap` — the probe only runs
+   `bwrap --version`, which succeeds — yet every actual spawn died at
+   `Can't mount devpts`. Treat the probe as necessary, not sufficient, and run
+   a real smoke-test sandbox at startup.
+
+8. **The two backends deny differently, and a naive test can't tell.**
+   Seatbelt denies the syscall on the real path (`EPERM`). Bubblewrap is
+   deny-by-default *by omission*: unlisted paths simply do not exist in the
+   namespace, so reads get `ENOENT` and a write to an ungranted path can return
+   **exit 0** while landing in a throwaway namespace. The original
+   `fs-write-denied` scenario scored that as a failure; the replacement
+   `fs-write-contained` asserts the host file is absent afterwards, which is the
+   property that actually matters and holds on both backends.
+
+9. **Containers block bubblewrap on mount visibility, not capabilities.**
+   See [Running in Docker](#running-in-docker) — `label=disable` + `unmask=ALL`
+   is enough; `--cap-add ALL` and `seccomp=unconfined` are not.
+
+10. **Docker is a real second containment layer here.** Because the container
+    filesystem *is* the sandbox's host, the blast radius of a policy mistake is
+    the container, not your laptop. Given that upstream does not yet treat MXC
+    profiles as security boundaries, running MXC inside a container is the more
+    defensible posture today.
+
 ## Files
 
 | File | Purpose |
@@ -137,6 +225,8 @@ Things the upstream sample does not spell out, learned the hard way here:
 | `src/index.ts` | the scenario suite |
 | `src/hello-sandbox.ts` | upstream README sample, adapted |
 | `src/platform-probe.ts` | dumps backends and discovered policy paths |
+| `Dockerfile` | Debian + bubblewrap + pnpm image |
+| `docker-compose.yml` | three profiles: minimal, stock (fails), privileged |
 
 ## References
 

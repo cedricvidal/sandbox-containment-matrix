@@ -1,0 +1,43 @@
+# Runs the MXC experiment inside a Linux container, where MXC uses the
+# `bubblewrap` backend.
+#
+#   docker compose run --rm mxc              # works: minimum viable config
+#   docker compose run --rm mxc-stock        # fails: stock container hardening
+#   docker compose run --rm mxc-privileged   # works: sledgehammer fallback
+#
+# Override the command to run another entry point:
+#   docker compose run --rm mxc pnpm probe
+#
+# If npmjs.org is unreachable from your build network (corporate proxy), build
+# with an explicit registry:
+#   docker compose build --build-arg NPM_REGISTRY=https://your-proxy/npm/ mxc
+
+x-mxc-base: &mxc-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+  image: sandbox-mxc-sdk-typescript:latest
+  init: true
+
+services:
+  # Minimum that lets bwrap build its namespace. Notably NOT privileged and with
+  # no added capabilities — see the README for why each option is needed.
+  mxc:
+    <<: *mxc-base
+    security_opt:
+      # SELinux denies bwrap's devpts mount inside the container.
+      - label=disable
+      # Docker/Podman mask parts of /proc; the kernel then refuses to let a
+      # nested namespace mount its own proc.
+      - unmask=ALL
+
+  # Stock container hardening — kept to demonstrate the failure mode.
+  mxc-stock:
+    <<: *mxc-base
+
+  # Full privileges. Also works, but grants far more than MXC needs.
+  mxc-privileged:
+    <<: *mxc-base
+    privileged: true
