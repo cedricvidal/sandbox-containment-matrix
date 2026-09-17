@@ -208,7 +208,64 @@ The baseline scenario could not start a sandbox — aborting.
 
 MXC has no CPU, memory or process-count field on any cross-platform backend
 ([findings.md](./findings.md) §12), so the container is the only place to
-enforce them. The `mxc-limits` profile:
+enforce them.
+
+### Which layer owns which control
+
+The two layers from [1a](#1a-nesting--which-boundary-is-inside-which) divide
+the work. MXC governs what the workload can *touch*; the cgroup governs how
+much it can *consume*. Neither covers the other:
+
+```mermaid
+flowchart TB
+  subgraph L3["Layer 3 · Container — cgroup v2"]
+    direction TB
+    CG["mem_limit · memswap_limit<br/>cpus · pids_limit"]
+    subgraph L4["Layer 4 · bwrap sandbox — MXC policy"]
+      direction TB
+      MX["readonlyPaths / readwritePaths<br/>network egress / ingress<br/>timeoutMs (ignored on Linux)"]
+      W["workload"]
+    end
+  end
+
+  MX -->|"governs what it can reach"| W
+  CG -->|"governs how much it can consume:<br/>throttle or OOM-kill"| W
+```
+
+Read that as a division of responsibility, not a fallback: a memory bomb is
+invisible to MXC, and a path traversal is invisible to the cgroup.
+
+### How the memory kill actually lands
+
+The enforcement point is the page fault, not the allocation — which is exactly
+why the first version of the probe measured nothing
+([findings.md](./findings.md) §12):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Workload<br/>(inside bwrap)
+    participant K as Linux kernel
+    participant CG as cgroup v2<br/>memory controller
+
+    W->>K: Buffer.alloc(512 MB)
+    K-->>W: virtual mapping only — zero pages, nothing committed
+    Note over W,CG: A probe that stops here sees "no cap" and is wrong
+    W->>K: write 1 byte per 4 KiB page
+    loop each page fault
+        K->>CG: charge one page
+    end
+    CG-->>K: charge exceeds mem_limit 256m
+    K-->>W: SIGKILL → exit 137
+```
+
+CPU is throttled rather than killed: the workload keeps running, but the
+scheduler caps its share, which is why the parallelism ratio falls from 3.92x
+to 0.51x under `cpus: 0.5` instead of the process dying.
+
+### Configuration
+
+The `mxc-limits` profile:
 
 ```yaml
 mem_limit: 256m
