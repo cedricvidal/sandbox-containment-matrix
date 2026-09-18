@@ -3,11 +3,13 @@
 Research follow-up to [kubernetes.md](./kubernetes.md), which found that MXC's
 bubblewrap backend only works on `aks-scope-v2-int` with `privileged: true`.
 
-**Short answer: yes, and the cleanest option is a Kata (Pod Sandboxing) node
-pool — but it needs a different VM size than the cluster currently uses.**
+**Short answer: yes, but only by changing the node OS.** The cheap pod-level
+fix was tested and does not work, so the cleanest remaining option is a Kata
+(Pod Sandboxing) node pool — which needs a different VM size than the cluster
+currently uses.
 
-> Read-only research. No IaC was modified and no cluster configuration was
-> changed. The one diagnostic pod used to read a node sysctl was deleted.
+> No IaC was modified and no cluster configuration was changed. Testing used
+> ephemeral pods in a temporary namespace, which has been deleted.
 
 ## Root cause: an Ubuntu 24.04 kernel restriction
 
@@ -21,10 +23,14 @@ own was the problem. That was close but wrong. Read from a node:
 ```
 
 `apparmor_restrict_unprivileged_userns` is the restriction Ubuntu introduced in
-23.10 and enabled by default in 24.04. It blocks unprivileged processes from
-creating user namespaces — precisely the operation `bwrap --unshare-user`
-performs, which is why the failure was `setting up uid map: Operation not
-permitted` and why adding `SETUID`/`SETGID` changed nothing.
+23.10 and enabled by default in 24.04.
+
+Testing (see [option 3](#option-3--apparmor-unconfined-tested-does-not-work))
+pinned down how it bites: **`unshare --user` succeeds**, so namespace creation
+is allowed, but the subsequent write to `/proc/self/uid_map` is denied. bwrap
+needs that write, which is why the error is `setting up uid map` rather than a
+failure to unshare, and why neither extra capabilities nor an unconfined
+AppArmor profile change the outcome.
 
 **This also explains the platform difference.** Our local container is Debian
 bookworm, which does not ship this restriction; the AKS nodes are Ubuntu 24.04,
@@ -34,11 +40,17 @@ host distribution.
 ```mermaid
 flowchart TB
   subgraph U["AKS node · Ubuntu 24.04"]
-    A["apparmor_restrict_unprivileged_userns = 1"] -->|blocks| B["bwrap --unshare-user<br/>unprivileged"]
-    B --> C["setting up uid map:<br/>Operation not permitted"]
+    direction TB
+    A["apparmor_restrict_unprivileged_userns = 1"]
+    B["unshare --user<br/>namespace created"]
+    C["write /proc/self/uid_map<br/>DENIED"]
+    D["bwrap: setting up uid map:<br/>Operation not permitted"]
+    A --> B --> C --> D
+    E["AppArmor Unconfined<br/>+CAP_SYS_ADMIN"] -.->|"does not lift it<br/>(tested)"| C
   end
-  subgraph D["Local container · Debian bookworm"]
-    E["restriction absent"] --> F["bwrap --unshare-user<br/>unprivileged works"]
+  subgraph L["Local container · Debian bookworm"]
+    direction TB
+    F["restriction absent"] --> G["uid_map write allowed"] --> H["bwrap works unprivileged"]
   end
 ```
 
@@ -48,7 +60,7 @@ flowchart TB
 |---|--------|------------------|------------------|------------|
 | 1 | Kata Pod Sandboxing node pool | **Yes** | new pool, new VM size | High — documented, purpose-built |
 | 2 | Azure Linux node pool | **Yes** | new pool | Medium — needs testing |
-| 3 | AppArmor `Unconfined` on the pod | No change needed | none | Medium — cheapest to test |
+| 3 | ~~AppArmor `Unconfined` on the pod~~ | n/a | none | **Tested — does not work** |
 | 4 | DaemonSet flipping the sysctl | Yes, but | none | Works, but a bad idea |
 | 5 | Status quo: `privileged: true` | n/a | none | Works today |
 
@@ -104,27 +116,55 @@ Marked medium confidence deliberately: it follows from the root cause, but
 **it has not been tested**, and this experiment has twice been wrong about what
 "should" work ([findings.md](./findings.md) §7, §17). Test before relying on it.
 
-### Option 3 — AppArmor `Unconfined` (test this first)
+### Option 3 — AppArmor `Unconfined`: tested, does not work
 
-The restriction is AppArmor-mediated, and Kubernetes 1.30+ exposes the profile
-through `securityContext`:
+This was the cheapest option, so it was tested first. **It does not work.**
 
-```yaml
-spec:
-  containers:
-    - name: mxc
-      securityContext:
-        appArmorProfile:
-          type: Unconfined
+The hypothesis: the restriction is AppArmor-mediated, so running the pod
+unconfined should lift it, and MXC would run on the existing node pools with no
+infrastructure change at all.
+
+Five variants, all on `aks-scope-v2-int`, each reporting its AppArmor profile,
+whether it can create a user namespace, and whether bwrap can build its sandbox:
+
+| # | AppArmor profile | Capabilities | `hostUsers` | `unshare --user` | uid_map write | bwrap |
+|---|---|---|---|---|---|---|
+| t1 | `cri-containerd.apparmor.d (enforce)` — control | drop `ALL` | `false` | OK | **EPERM** | fails |
+| t2 | `unconfined` | drop `ALL` | `false` | OK | **EPERM** | fails |
+| t3 | `unconfined` | `+SETUID,SETGID,SYS_ADMIN` | `false` | OK | **EPERM** | fails |
+| t4 | `unconfined` | `+SETUID,SETGID,SYS_ADMIN` | (host) | OK | **EPERM** | fails |
+| t5 | `unconfined` | **privileged** | `false` | OK | OK | **OK** |
+
+The profile change definitely took effect — t1 reports
+`cri-containerd.apparmor.d (enforce)` while t2–t4 report `unconfined` — and the
+capabilities were genuinely granted: t3 reported `CapEff: 00000000002000c0`,
+which decodes to exactly `CAP_SETGID | CAP_SETUID | CAP_SYS_ADMIN`.
+
+**Neither unconfining AppArmor nor adding `CAP_SYS_ADMIN` lifts the
+restriction.** Only `privileged: true` works.
+
+#### What the test revealed about the mechanism
+
+The failure is narrower than assumed. `unshare --user` **succeeds in every
+variant** — creating a user namespace is allowed. What fails is the subsequent
+write to `/proc/self/uid_map`:
+
+```
+unshare: write failed /proc/self/uid_map: Operation not permitted
+bwrap: setting up uid map: Operation not permitted
 ```
 
-If that alone lets bwrap create its user namespace, MXC runs on the **existing**
-node pools with no infrastructure change whatsoever. It is a five-minute test
-and would make options 1 and 2 unnecessary for non-production use.
+So Ubuntu's restriction does not block namespace *creation*; it denies the
+privileged uid-map write that makes the namespace usable. That is consistent
+with how the restriction is implemented — the process gets its namespace but
+not the authority to populate the mapping — and it explains why capabilities
+granted in the parent namespace do not rescue it.
 
-Caveat: on Ubuntu 24.04 the restriction is known to apply to unconfined
-processes too in some configurations, so this may simply not work. Cheap to
-find out.
+Stated conservatively: the *observations* above are measured and reproducible;
+the *mechanism* is the best available explanation, and this experiment has
+already been wrong twice about mechanism ([findings.md](./findings.md) §7, §17).
+What matters operationally is settled either way — the pod-level fix is ruled
+out, and the remaining options all change the node OS.
 
 ### Option 4 — DaemonSet setting the sysctl (not recommended)
 
@@ -165,8 +205,8 @@ pool via `--kubelet-config`.
 
 ## Recommendation
 
-1. **Test option 3 first** (AppArmor `Unconfined`) — no infrastructure change,
-   and it either solves the problem outright or rules itself out in minutes.
+1. ~~Test option 3 first~~ — **done, and ruled out.** No pod-level setting
+   avoids `privileged` on these Ubuntu 24.04 node pools.
 2. **If MXC is going to run untrusted code on AKS for real, use option 1.** A
    dedicated `KataVmIsolation` node pool on `Standard_D4ads_v5` + AzureLinux
    gives each pod its own kernel, which is a genuine answer to the shared-kernel
