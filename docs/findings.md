@@ -611,7 +611,7 @@ RAM as elastic (it differed between sprites) rather than a fixed guarantee.
 
 **What happened** — the config developed against Podman on macOS does not run on
 Docker Engine on a GitHub Actions `ubuntu-24.04` runner. Getting the *unprivileged*
-bwrap suite green there peeled off three distinct layers, each surfaced only after
+bwrap suite green there peeled off four distinct layers, each surfaced only after
 the previous was fixed.
 
 **Evidence** — in order:
@@ -625,12 +625,12 @@ bwrap: No permissions to create new namespace, likely because the kernel
        does not allow non-privileged user namespaces.
 #    (ubuntu-24.04 ships kernel.apparmor_restrict_unprivileged_userns=1)
 
-# 3. after `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, the
-#    container's docker-default AppArmor profile still blocked it — same bwrap
-#    error — until the container was made apparmor=unconfined.
+# 3./4. after sysctl=0, the SAME bwrap error persisted until BOTH the
+#    docker-default AppArmor profile AND the default seccomp profile were
+#    removed from the container.
 ```
 
-The three causes are independent:
+The four causes are independent:
 
 1. **`unmask=ALL` / `mask` are Podman security options**; Docker Engine rejects
    them outright. The portable equivalent is `systempaths=unconfined`, accepted by
@@ -639,15 +639,23 @@ The three causes are independent:
 2. **Ubuntu 24.04 enables `kernel.apparmor_restrict_unprivileged_userns=1`** — the
    same restriction this repo hit on AKS (§17). It must be lifted on the host, or
    bwrap cannot create its user namespace at all.
-3. **The `docker-default` AppArmor profile still mediates userns** even with the
-   host sysctl at 0; the container must run `apparmor=unconfined` (the AppArmor
-   analogue of `label=disable`).
+3. **The `docker-default` AppArmor profile mediates userns**; the container must
+   run `apparmor=unconfined` (the AppArmor analogue of `label=disable`).
+4. **Docker's default seccomp profile denies `clone`/`unshare` with
+   `CLONE_NEWUSER`** unless the container holds `CAP_SYS_ADMIN` — so an
+   unprivileged user namespace cannot be created. **Podman's default seccomp
+   profile allows it**, which is the real reason the suite "worked on my machine"
+   and not on Docker. `seccomp=unconfined` removes the filter (MXC applies none of
+   its own anyway — §10).
 
-**Takeaway** — on Docker Engine + Ubuntu the minimum for *unprivileged* bwrap is
-`label=disable` + `apparmor=unconfined` + `systempaths=unconfined` in
-`security_opt`, plus `kernel.apparmor_restrict_unprivileged_userns=0` on the host
-(the CI does this in a step). None of these grant privilege or capabilities — they
-disable host MAC and /proc masking so a non-root user namespace can be built. On
-Podman/Debian none were needed, which is why the original two-option config
-"worked on my machine". The bisect table in [docker.md](./docker.md) is left as
-the historical Podman record.
+**Takeaway** — on Docker Engine + Ubuntu, running bwrap *unprivileged* takes
+`label=disable` + `apparmor=unconfined` + `seccomp=unconfined` +
+`systempaths=unconfined` in `security_opt`, plus
+`kernel.apparmor_restrict_unprivileged_userns=0` on the host (the CI sets it in a
+step). None of these grant privilege or capabilities — they strip the container's
+host MAC, syscall filter, and /proc masking so a non-root user namespace can be
+built. The notable result: the difference between "works" and "fails" was almost
+entirely **Docker's default profiles being stricter than Podman's**, not anything
+about the workload. On Podman/Debian none of these were needed. The bisect table
+in [docker.md](./docker.md) is left as the historical Podman record;
+`scripts/lib.sh` keeps the leaner Podman set it was written for.

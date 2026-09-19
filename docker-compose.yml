@@ -39,6 +39,11 @@ services:
       # lifted; unconfining it is the AppArmor analogue of label=disable. Not
       # needed under Podman/Debian. See docs/findings.md §23.
       - apparmor=unconfined
+      # Docker's default seccomp profile denies clone/unshare CLONE_NEWUSER
+      # without CAP_SYS_ADMIN, so an unprivileged user namespace can't be made;
+      # Podman's default profile allows it. Unconfine it (MXC applies no syscall
+      # filter of its own anyway — findings §10).
+      - seccomp=unconfined
       # Docker/Podman mask parts of /proc; the kernel then refuses to let a
       # nested namespace mount its own proc. `systempaths=unconfined` clears the
       # masked + read-only /proc paths and — unlike Podman's `unmask=ALL` — is
@@ -52,6 +57,7 @@ services:
     security_opt:
       - label=disable
       - apparmor=unconfined
+      - seccomp=unconfined
       - systempaths=unconfined
     mem_limit: 256m
     memswap_limit: 256m
@@ -70,6 +76,7 @@ services:
     security_opt:
       - label=disable
       - apparmor=unconfined
+      - seccomp=unconfined
       - systempaths=unconfined
     cpuset: "0-3"
     mem_limit: 1g
