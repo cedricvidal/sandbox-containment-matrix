@@ -479,3 +479,128 @@ server* accepts a securityContext that cannot actually run the workload.
 `--dry-run=server` validates admission, not execution — I initially wrote up
 the opposite conclusion from a passing dry-run, and only running the pods
 corrected it. Full comparison in [kubernetes.md](./kubernetes.md).
+
+## Fly.io Sprites — a different kind of sandbox
+
+These entries are not about MXC. They record what **Fly.io Sprites** contains
+when evaluated on its own as a sandbox for untrusted code. Environment: org
+`cedric-925`, sprite platform `0.0.1-rc48`, `Ubuntu 26.04.1 LTS`, kernel
+`6.12.105-fly` (x86_64). Reproduce with
+[`../scripts/run-on-sprite.sh`](../scripts/run-on-sprite.sh). Full write-up in
+[sprites.md](./sprites.md).
+
+### 18. The boundary is a KVM micro-VM, and the default user is not root — but root is one command away
+
+**What happened** — a sprite is a per-tenant KVM guest (same substrate as Fly
+Machines), not a userspace jail on a shared kernel. Inside, the shell runs as an
+unprivileged user, yet passwordless `sudo` yields root, and the shell already
+holds `CAP_SYS_ADMIN` with no syscall filter.
+
+**Evidence**
+
+```
+$ uname -a
+Linux <sprite> 6.12.105-fly #1 SMP PREEMPT_DYNAMIC ... x86_64 GNU/Linux
+$ whoami; id
+sprite
+uid=1001(sprite) gid=1001(sprite) groups=1001(sprite)
+$ sudo -n whoami
+root
+$ grep -E "^Cap(Eff|Bnd)|Seccomp" /proc/self/status
+CapEff: 00000000a82435fb   # chown,dac_override,setuid,setpcap,net_admin,net_raw,sys_chroot,sys_admin,mknod,...
+Seccomp: 0
+Seccomp_filters: 0
+```
+
+**Takeaway** — Sprites do not confine the *process*; they give you root and
+confine the *machine*. `Seccomp: 0` is the same result as every other row here,
+but the consequence is different: the whole syscall ABI is reachable, yet a
+kernel LPE lands in a disposable single-tenant guest kernel rather than on a
+shared host. Do not treat the in-guest environment as least-privilege.
+
+### 19. The PID namespace, cloud metadata, and private ranges are all closed
+
+**What happened** — the guest sees only its own processes, and cannot reach the
+node, the cloud metadata endpoint, or RFC1918 addresses.
+
+**Evidence**
+
+```
+$ ps -e -o pid,comm | head; echo total $(ps -e | wc -l)
+  PID COMMAND
+    1 tini
+    2 tail
+   36 sh
+total 7
+$ curl --max-time 8 http://169.254.169.254/      -> curl: (28) Connection timed out
+$ curl --max-time 6 http://10.0.0.1/             -> curl: (7) Could not connect
+```
+
+**Takeaway** — pid 1 is `tini` and nothing from the host is visible, consistent
+with a separate VM plus an inner PID namespace. The metadata endpoint (the usual
+cloud-sandbox escalation target) and private ranges are unreachable by default.
+
+### 20. Egress is a real, externally-enforced DNS allowlist
+
+**What happened** — egress is unrestricted by default, but a policy posted to
+`/v1/sprites/<name>/policy/network` filters it by domain. The sprite cannot edit
+its own policy (it is read-only inside); denied lookups return DNS `REFUSED`, and
+raw-IP connections are blocked unless resolved from an allowed domain.
+
+**Evidence** — default (no policy) vs. `allow example.com, deny *`:
+
+```
+# default:
+example.com HTTP 200 ; github.com HTTP 200 ; 1.1.1.1 HTTP 301
+
+# after POST {"rules":[{"domain":"example.com","action":"allow"},{"domain":"*","action":"deny"}]}  -> HTTP 204
+[example.com] status: NOERROR      example.com HTTP 200
+[github.com]  status: REFUSED      github.com curl: (6) Could not resolve host
+1.1.1.1       curl: (7) Failed to connect ... Could not connect   # raw IP now blocked
+```
+
+**Takeaway** — this is the containment control the userspace rows could not
+express cleanly: seatbelt reports `network-allowlist` as *unsupported*
+([threat-model.md](./threat-model.md)), and bubblewrap only managed it with
+`/dev/net/tun` added ([findings.md](./findings.md) §11). Because the policy is
+set from outside and is read-only within, code in the sprite cannot lift its own
+egress restrictions. `{"rules": []}` returns to unrestricted mode.
+
+### 21. Checkpoints roll back the whole writable overlay
+
+**What happened** — a checkpoint captures the writable filesystem; restoring it
+reverts every change made since, including newly-created files.
+
+**Evidence**
+
+```
+$ echo ORIGINAL-CONTENT > canary.txt ; sprite checkpoint create   -> "Checkpoint v1 created"
+$ echo MUTATED > canary.txt ; echo x > new-file.txt
+$ sprite restore v1                                               -> "Restored to checkpoint v1"
+$ cat canary.txt      -> ORIGINAL-CONTENT          # mutation reverted
+$ cat new-file.txt    -> No such file or directory  # post-checkpoint file gone
+```
+
+**Takeaway** — state containment/recovery is a first-class capability: snapshot
+before handing control to untrusted code, restore to discard whatever it did.
+There is no equivalent in the MXC rows.
+
+### 22. No in-VM resource cap — the VM allocation is the ceiling
+
+**What happened** — like MXC (§12), a sprite applies no cgroup CPU/memory/pid cap
+to the workload; unlike MXC, the containment is structural rather than absent.
+
+**Evidence**
+
+```
+$ for f in cpu.max memory.max pids.max; do printf "%s: "; cat /sys/fs/cgroup/$f; done
+cpu.max: max 100000        # "max" = no quota
+memory.max: max
+pids.max: max
+$ nproc -> 8 ; MemTotal -> 16377120 kB on one sprite, 8388608 kB on another
+```
+
+**Takeaway** — a runaway workload can saturate the sprite's own ~8 vCPU but
+nothing beyond it: it cannot touch the host or another tenant, and Fly meters it
+per CPU/GB-hour, so the blast radius and cost are bounded and attributable. Treat
+RAM as elastic (it differed between sprites) rather than a fixed guarantee.

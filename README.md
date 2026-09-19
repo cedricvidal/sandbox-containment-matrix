@@ -26,6 +26,7 @@ Findings are recorded in [`docs/`](./docs) as they are discovered:
 | [docs/docker.md](./docs/docker.md) | Running in a container, with architecture diagrams |
 | [docs/kubernetes.md](./docs/kubernetes.md) | Docker Compose vs AKS sandboxing differences |
 | [docs/aks-enablement.md](./docs/aks-enablement.md) | How AKS could be configured to run MXC unprivileged |
+| [docs/sprites.md](./docs/sprites.md) | Fly.io Sprites evaluated as a sandbox (KVM micro-VM, egress allowlist, checkpoints) |
 
 ## What this experiment does
 
@@ -162,9 +163,10 @@ the most time:
 | `Dockerfile` | Debian + bubblewrap + pnpm image |
 | `src/trusted-latency.ts` | trusted-side responsiveness under sandboxed CPU load |
 | `docker-compose.yml` | five profiles: minimal, resource-capped, core-reserved, stock (fails), privileged |
-| `docs/` | findings log, threat model, backend comparison, Docker + AKS guides |
+| `docs/` | findings log, threat model, backend comparison, Docker + AKS + Sprites guides |
 | `k8s/` | Kubernetes manifests (applied via GitOps, not `kubectl apply`) |
 | `scripts/` | reproduction scripts for each finding |
+| `scripts/run-on-sprite.sh` | provision → probe → destroy a Fly.io Sprite (see [docs/sprites.md](./docs/sprites.md)) |
 
 ## References
 
