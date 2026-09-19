@@ -34,9 +34,21 @@ services:
     security_opt:
       # SELinux denies bwrap's devpts mount inside the container.
       - label=disable
+      # On Ubuntu 24.04 + Docker Engine the docker-default AppArmor profile
+      # blocks bwrap's unprivileged user namespace even after the host sysctl is
+      # lifted; unconfining it is the AppArmor analogue of label=disable. Not
+      # needed under Podman/Debian. See docs/findings.md §23.
+      - apparmor=unconfined
+      # Docker's default seccomp profile denies clone/unshare CLONE_NEWUSER
+      # without CAP_SYS_ADMIN, so an unprivileged user namespace can't be made;
+      # Podman's default profile allows it. Unconfine it (MXC applies no syscall
+      # filter of its own anyway — findings §10).
+      - seccomp=unconfined
       # Docker/Podman mask parts of /proc; the kernel then refuses to let a
-      # nested namespace mount its own proc.
-      - unmask=ALL
+      # nested namespace mount its own proc. `systempaths=unconfined` clears the
+      # masked + read-only /proc paths and — unlike Podman's `unmask=ALL` — is
+      # accepted by both Docker and Podman (see docs/findings.md §23).
+      - systempaths=unconfined
 
   # MXC expresses no CPU/memory limits, so resource containment has to come
   # from the container's cgroup. This profile adds what MXC cannot.
@@ -44,7 +56,9 @@ services:
     <<: *mxc-base
     security_opt:
       - label=disable
-      - unmask=ALL
+      - apparmor=unconfined
+      - seccomp=unconfined
+      - systempaths=unconfined
     mem_limit: 256m
     memswap_limit: 256m
     cpus: 0.5
@@ -61,7 +75,9 @@ services:
     <<: *mxc-base
     security_opt:
       - label=disable
-      - unmask=ALL
+      - apparmor=unconfined
+      - seccomp=unconfined
+      - systempaths=unconfined
     cpuset: "0-3"
     mem_limit: 1g
     memswap_limit: 1g

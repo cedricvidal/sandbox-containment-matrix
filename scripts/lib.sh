@@ -6,7 +6,9 @@ IMAGE="${IMAGE:-sandbox-mxc-sdk-typescript:latest}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # The security options MXC's bubblewrap backend needs (docs/findings.md §13).
-MXC_OPTS=(--security-opt label=disable --security-opt unmask=ALL)
+# `systempaths=unconfined` clears the masked/read-only /proc paths; it works on
+# both Docker and Podman, whereas `unmask=ALL` is Podman-only (findings §23).
+MXC_OPTS=(--security-opt label=disable --security-opt systempaths=unconfined)
 
 # npmjs.org is unreachable from some corporate build networks; inherit whatever
 # registry npm is configured with so the build works either way.

@@ -11,6 +11,7 @@ Working notes for the `sandbox-mxc-sdk-typescript` experiment. The root
 | [docker.md](./docker.md) | Running the experiment in a container, with architecture diagrams |
 | [kubernetes.md](./kubernetes.md) | How sandboxing differs between docker compose and AKS |
 | [aks-enablement.md](./aks-enablement.md) | Can AKS be configured to run MXC in pods? (research) |
+| [sprites.md](./sprites.md) | Fly.io Sprites evaluated as a sandbox on its own (KVM micro-VM, egress allowlist, checkpoints) |
 
 ## Convention
 

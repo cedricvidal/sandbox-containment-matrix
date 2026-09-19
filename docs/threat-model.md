@@ -55,6 +55,29 @@ when run under `mxc-limits`.
 `unsupported` is tallied separately from `contained` on purpose — "this backend
 cannot express the control you asked for" is not "the control held".
 
+## A different class of sandbox: Fly.io Sprites
+
+The rows above confine an MXC child *process* on a shared host kernel. A
+[Fly.io Sprite](./sprites.md) is not comparable probe-for-probe: it confines the
+whole *machine* in a per-tenant KVM micro-VM, so the MXC probes (symlink escapes,
+env-leak, etc.) do not map onto it. Measured separately (see
+[sprites.md](./sprites.md) and [findings.md](./findings.md) §18–22):
+
+| Property | Verdict |
+|----------|---------|
+| Isolation boundary | KVM micro-VM per tenant — a kernel escape stays in a disposable guest, not the host |
+| PID namespace / host visibility | contained — only the sprite's own processes are visible |
+| Cloud metadata / private ranges | contained — `169.254.169.254` and RFC1918 unreachable |
+| Egress control | **enforced** — DNS allowlist set from outside, read-only inside; denied → `REFUSED` |
+| State rollback | checkpoint / restore reverts the whole overlay |
+| Syscall filter | none (`Seccomp: 0`) — same as the MXC rows |
+| In-guest privilege | root via `sudo`, `CAP_SYS_ADMIN` — *not* a least-privilege process jail |
+| Resource exhaustion | no in-VM cgroup cap; bounded by the VM allocation + per-hour billing |
+
+The distinction that matters: Sprites do not lock down the process (they hand you
+root); they make the *unit of isolation* a throwaway VM whose egress you control
+and whose disk you can rewind.
+
 ## Explicitly not covered
 
 - **The kernel.** Both backends share the host kernel and, measured rather than
