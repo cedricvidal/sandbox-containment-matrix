@@ -54,7 +54,7 @@ confines the whole *machine* in a VM. Details in the linked docs.
 | Kernel boundary | shared host kernel | shared host kernel | shared node kernel | dedicated guest kernel (`6.12-fly`) |
 | Kernel LPE escapes to… | the host | the host | the node | a disposable guest VM |
 | Host / OS | macOS 15 arm64 | Debian bookworm arm64 | Ubuntu 24.04 amd64 | Ubuntu 26.04 amd64 |
-| Needs privilege to run? | no | no (`label=disable`, `systempaths=unconfined`) | **yes** — `privileged: true` (bwrap can't map uid in k8s userns) | n/a (Fly runs the VM) |
+| Needs privilege to run? | no | no — disable host MAC + `/proc` masking (`label=disable`, `apparmor=unconfined`, `systempaths=unconfined`; findings §23) | **yes** — `privileged: true` (bwrap can't map uid in k8s userns) | n/a (Fly runs the VM) |
 | In-sandbox privilege | user | container root | container root | root via `sudo`, `CAP_SYS_ADMIN` |
 
 ### Controls & containment outcomes

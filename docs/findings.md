@@ -607,27 +607,47 @@ RAM as elastic (it differed between sprites) rather than a fixed guarantee.
 
 ## Packaging, continued
 
-### 23. `unmask=ALL` is Podman-only; Docker Engine needs `systempaths=unconfined`
+### 23. Running unprivileged bwrap on Docker Engine + Ubuntu 24.04 takes three fixes the Podman/Debian setup did not
 
-**What happened** — the CI Linux/bubblewrap job failed at `docker compose run`
-before the suite even started. The `security_opt: unmask=ALL` that works locally
-(this repo was developed against Podman) is rejected outright by Docker Engine on
-the GitHub Actions runner.
+**What happened** — the config developed against Podman on macOS does not run on
+Docker Engine on a GitHub Actions `ubuntu-24.04` runner. Getting the *unprivileged*
+bwrap suite green there peeled off three distinct layers, each surfaced only after
+the previous was fixed.
 
-**Evidence**
+**Evidence** — in order:
 
 ```
+# 1. security-opt name
 Error response from daemon: invalid --security-opt 2: "unmask=ALL"
+
+# 2. after switching to systempaths=unconfined, host userns restriction:
+bwrap: No permissions to create new namespace, likely because the kernel
+       does not allow non-privileged user namespaces.
+#    (ubuntu-24.04 ships kernel.apparmor_restrict_unprivileged_userns=1)
+
+# 3. after `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, the
+#    container's docker-default AppArmor profile still blocked it — same bwrap
+#    error — until the container was made apparmor=unconfined.
 ```
 
-`label=disable` (opt 1) is accepted; `unmask=ALL` (opt 2) is not. `unmask` /
-`mask` are Podman security options; Docker Engine does not implement them. This
-is the open question from [docker.md](./docker.md) ("`unmask=ALL` is Podman
-syntax … `systempaths=unconfined` … remains unverified on Docker Engine proper")
-resolved by a real Docker daemon: Docker *rejects* `unmask=ALL`.
+The three causes are independent:
 
-**Takeaway** — use `--security-opt systempaths=unconfined`, which clears the
-masked and read-only `/proc` paths and is accepted by **both** Docker and Podman.
-`docker-compose.yml` and `scripts/lib.sh` now use it so the same config runs
-under either runtime. (The bisect table in [docker.md](./docker.md) records the
-original Podman `unmask=ALL` evidence and is left as the historical record.)
+1. **`unmask=ALL` / `mask` are Podman security options**; Docker Engine rejects
+   them outright. The portable equivalent is `systempaths=unconfined`, accepted by
+   both runtimes — resolving the open question in [docker.md](./docker.md) ("…
+   remains unverified on Docker Engine proper").
+2. **Ubuntu 24.04 enables `kernel.apparmor_restrict_unprivileged_userns=1`** — the
+   same restriction this repo hit on AKS (§17). It must be lifted on the host, or
+   bwrap cannot create its user namespace at all.
+3. **The `docker-default` AppArmor profile still mediates userns** even with the
+   host sysctl at 0; the container must run `apparmor=unconfined` (the AppArmor
+   analogue of `label=disable`).
+
+**Takeaway** — on Docker Engine + Ubuntu the minimum for *unprivileged* bwrap is
+`label=disable` + `apparmor=unconfined` + `systempaths=unconfined` in
+`security_opt`, plus `kernel.apparmor_restrict_unprivileged_userns=0` on the host
+(the CI does this in a step). None of these grant privilege or capabilities — they
+disable host MAC and /proc masking so a non-root user namespace can be built. On
+Podman/Debian none were needed, which is why the original two-option config
+"worked on my machine". The bisect table in [docker.md](./docker.md) is left as
+the historical Podman record.

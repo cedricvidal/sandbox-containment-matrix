@@ -34,6 +34,11 @@ services:
     security_opt:
       # SELinux denies bwrap's devpts mount inside the container.
       - label=disable
+      # On Ubuntu 24.04 + Docker Engine the docker-default AppArmor profile
+      # blocks bwrap's unprivileged user namespace even after the host sysctl is
+      # lifted; unconfining it is the AppArmor analogue of label=disable. Not
+      # needed under Podman/Debian. See docs/findings.md §23.
+      - apparmor=unconfined
       # Docker/Podman mask parts of /proc; the kernel then refuses to let a
       # nested namespace mount its own proc. `systempaths=unconfined` clears the
       # masked + read-only /proc paths and — unlike Podman's `unmask=ALL` — is
@@ -46,6 +51,7 @@ services:
     <<: *mxc-base
     security_opt:
       - label=disable
+      - apparmor=unconfined
       - systempaths=unconfined
     mem_limit: 256m
     memswap_limit: 256m
@@ -63,6 +69,7 @@ services:
     <<: *mxc-base
     security_opt:
       - label=disable
+      - apparmor=unconfined
       - systempaths=unconfined
     cpuset: "0-3"
     mem_limit: 1g

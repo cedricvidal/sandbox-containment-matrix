@@ -31,9 +31,11 @@ pnpm typecheck
 ```
 
 In a Linux container (Bubblewrap): `docker compose run --rm mxc pnpm dev`. The
-security options bwrap needs (`label=disable`, `systempaths=unconfined`) live in
-`lib.sh` and the compose file — don't drop them. (`systempaths=unconfined` is the
-cross-runtime spelling; Podman's `unmask=ALL` is rejected by Docker — findings §23.)
+security options bwrap needs live in `lib.sh` and the compose file — don't drop
+them. On Docker Engine + Ubuntu the unprivileged path needs `label=disable`,
+`apparmor=unconfined`, and `systempaths=unconfined`, plus
+`kernel.apparmor_restrict_unprivileged_userns=0` on the host (the CI sets it).
+Podman/Debian needed fewer of these — see findings §23 for why.
 
 **Fly.io Sprites** — needs the `sprite` CLI (https://sprites.dev), authenticated:
 
