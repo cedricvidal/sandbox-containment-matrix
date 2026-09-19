@@ -1,18 +1,28 @@
-# sandbox-mxc-sdk-typescript
+# Sandbox Containment Matrix
 
-Experiment exercising **MXC** (Microsoft eXecution Containers) through the
+Empirically measuring what real sandbox systems for untrusted code (model
+output, plugins, tools) actually contain — on real hosts, with verbatim
+evidence, not from documentation. Each system is a row in the matrix;
+[the comparison](#sandbox-systems-compared) is the headline.
+
+The starting point is **MXC** (Microsoft eXecution Containers) via the
 [`@microsoft/mxc-sdk`](https://www.npmjs.com/package/@microsoft/mxc-sdk)
-TypeScript SDK — see [microsoft/mxc](https://github.com/microsoft/mxc).
+TypeScript SDK ([microsoft/mxc](https://github.com/microsoft/mxc)), which runs
+untrusted code inside an OS-native sandbox driven by a versioned JSON policy —
+the same cross-platform `SandboxPolicy` maps to `processcontainer` on Windows,
+`bubblewrap` on Linux, and `seatbelt` on macOS. From there the matrix widens to
+the *same* Bubblewrap backend on **AKS**, and to a different class of sandbox
+entirely: **[Fly.io Sprites](./docs/sprites.md)**, a per-tenant KVM micro-VM.
 
-MXC runs untrusted code (model output, plugins, tools) inside an OS-native
-sandbox driven by a versioned JSON policy. The same cross-platform
-`SandboxPolicy` maps to `processcontainer` on Windows, `bubblewrap` on Linux,
-and `seatbelt` on macOS.
+The two MXC suites (below) are the core probes; other systems are exercised by
+their own drivers (e.g. [`scripts/run-on-sprite.sh`](./scripts/run-on-sprite.sh))
+and written up in [`docs/`](./docs).
 
-> ⚠️ MXC is an **early preview**. Upstream explicitly states that generated
-> policies are currently overly permissive and that **no MXC profile should be
-> treated as a security boundary** yet. This experiment measures behaviour, it
-> does not certify containment.
+> ⚠️ Everything here **measures behaviour; it does not certify containment.** MXC
+> is an early preview whose upstream states its policies are overly permissive
+> and that **no MXC profile is a security boundary** yet; the other rows are
+> observations about moving targets too. Re-run the suites against a new version
+> before trusting anything.
 
 ## Docs
 
@@ -76,9 +86,12 @@ boundaries, not kernel boundaries. Sprites is the only one that moves the
 boundary to a VM, trading in-guest lockdown (you get root) for a disposable,
 egress-controlled, rewindable machine.
 
-## What this experiment does
+## The MXC suites
 
-Two suites, answering two different questions.
+The MXC rows of the matrix are driven by two TypeScript suites, answering two
+different questions. (Sprites has its own driver —
+[`scripts/run-on-sprite.sh`](./scripts/run-on-sprite.sh) — and is written up in
+[docs/sprites.md](./docs/sprites.md).)
 
 **`pnpm dev` — policy conformance.** Builds one policy per scenario and asserts
 the sandbox enforces it:
@@ -175,10 +188,10 @@ backends  : seatbelt
 === 9 passed, 0 failed, 0 errored, 0 skipped ===
 ```
 
-## Headline findings
+## Headline findings (MXC)
 
-The full log is in [docs/findings.md](./docs/findings.md). The ones that cost
-the most time:
+The full log is in [docs/findings.md](./docs/findings.md) — including the Sprites
+entries (§18–22). The MXC findings that cost the most time:
 
 1. **`0.6.0-alpha` does not work on macOS** — Seatbelt needs `0.7.0-alpha`+, so
    the upstream README sample fails on a Mac as written.
