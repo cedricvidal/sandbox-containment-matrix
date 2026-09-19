@@ -73,8 +73,8 @@ spec:
 ```
 
 Compared with local Docker, which needs no privilege at all — only
-`label=disable` and `unmask=ALL` — **AKS is the weaker posture for this
-workload**, and the user namespace is what claws most of it back.
+`label=disable` and `systempaths=unconfined` — **AKS is the weaker posture for
+this workload**, and the user namespace is what claws most of it back.
 
 ## Behaviour is otherwise identical to Docker
 

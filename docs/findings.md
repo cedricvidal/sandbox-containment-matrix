@@ -604,3 +604,30 @@ $ nproc -> 8 ; MemTotal -> 16377120 kB on one sprite, 8388608 kB on another
 nothing beyond it: it cannot touch the host or another tenant, and Fly meters it
 per CPU/GB-hour, so the blast radius and cost are bounded and attributable. Treat
 RAM as elastic (it differed between sprites) rather than a fixed guarantee.
+
+## Packaging, continued
+
+### 23. `unmask=ALL` is Podman-only; Docker Engine needs `systempaths=unconfined`
+
+**What happened** — the CI Linux/bubblewrap job failed at `docker compose run`
+before the suite even started. The `security_opt: unmask=ALL` that works locally
+(this repo was developed against Podman) is rejected outright by Docker Engine on
+the GitHub Actions runner.
+
+**Evidence**
+
+```
+Error response from daemon: invalid --security-opt 2: "unmask=ALL"
+```
+
+`label=disable` (opt 1) is accepted; `unmask=ALL` (opt 2) is not. `unmask` /
+`mask` are Podman security options; Docker Engine does not implement them. This
+is the open question from [docker.md](./docker.md) ("`unmask=ALL` is Podman
+syntax … `systempaths=unconfined` … remains unverified on Docker Engine proper")
+resolved by a real Docker daemon: Docker *rejects* `unmask=ALL`.
+
+**Takeaway** — use `--security-opt systempaths=unconfined`, which clears the
+masked and read-only `/proc` paths and is accepted by **both** Docker and Podman.
+`docker-compose.yml` and `scripts/lib.sh` now use it so the same config runs
+under either runtime. (The bisect table in [docker.md](./docker.md) records the
+original Podman `unmask=ALL` evidence and is left as the historical record.)

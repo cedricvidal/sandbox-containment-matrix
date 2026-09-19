@@ -35,8 +35,10 @@ services:
       # SELinux denies bwrap's devpts mount inside the container.
       - label=disable
       # Docker/Podman mask parts of /proc; the kernel then refuses to let a
-      # nested namespace mount its own proc.
-      - unmask=ALL
+      # nested namespace mount its own proc. `systempaths=unconfined` clears the
+      # masked + read-only /proc paths and — unlike Podman's `unmask=ALL` — is
+      # accepted by both Docker and Podman (see docs/findings.md §23).
+      - systempaths=unconfined
 
   # MXC expresses no CPU/memory limits, so resource containment has to come
   # from the container's cgroup. This profile adds what MXC cannot.
@@ -44,7 +46,7 @@ services:
     <<: *mxc-base
     security_opt:
       - label=disable
-      - unmask=ALL
+      - systempaths=unconfined
     mem_limit: 256m
     memswap_limit: 256m
     cpus: 0.5
@@ -61,7 +63,7 @@ services:
     <<: *mxc-base
     security_opt:
       - label=disable
-      - unmask=ALL
+      - systempaths=unconfined
     cpuset: "0-3"
     mem_limit: 1g
     memswap_limit: 1g
