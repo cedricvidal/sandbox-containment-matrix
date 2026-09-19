@@ -50,6 +50,14 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # ubuntu-24.04 ships kernel.apparmor_restrict_unprivileged_userns=1, which
+    # blocks the unprivileged user namespace bwrap needs — the exact restriction
+    # this repo hit on AKS (docs/findings.md §17, docs/aks-enablement.md). Lift
+    # it on the runner so the *unprivileged* bwrap path can be exercised, rather
+    # than falling back to a privileged container.
+    - name: Allow unprivileged user namespaces
+      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
     - name: Build image
       run: docker compose build mxc
 
