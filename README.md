@@ -28,6 +28,54 @@ Findings are recorded in [`docs/`](./docs) as they are discovered:
 | [docs/aks-enablement.md](./docs/aks-enablement.md) | How AKS could be configured to run MXC unprivileged |
 | [docs/sprites.md](./docs/sprites.md) | Fly.io Sprites evaluated as a sandbox (KVM micro-VM, egress allowlist, checkpoints) |
 
+## Sandbox systems compared
+
+Four systems have been exercised on real hosts: MXC on **Seatbelt** (macOS), MXC
+on **Bubblewrap** (local Docker), the same Bubblewrap on **AKS**, and **Fly.io
+Sprites**. The first three confine a child *process* on a shared kernel; Sprites
+confines the whole *machine* in a VM. Details in the linked docs.
+
+### Isolation model & posture
+
+| | Seatbelt (macOS) | Bubblewrap (Docker) | Bubblewrap on AKS | Fly.io Sprites |
+|---|---|---|---|---|
+| What's confined | one child process | one child process | one child process | the whole machine |
+| Mechanism | macOS Seatbelt profile | user+mount namespaces | same, in a pod | KVM micro-VM (Fly Machine) |
+| Kernel boundary | shared host kernel | shared host kernel | shared node kernel | dedicated guest kernel (`6.12-fly`) |
+| Kernel LPE escapes to… | the host | the host | the node | a disposable guest VM |
+| Host / OS | macOS 15 arm64 | Debian bookworm arm64 | Ubuntu 24.04 amd64 | Ubuntu 26.04 amd64 |
+| Needs privilege to run? | no | no (`label=disable`, `unmask=ALL`) | **yes** — `privileged: true` (bwrap can't map uid in k8s userns) | n/a (Fly runs the VM) |
+| In-sandbox privilege | user | container root | container root | root via `sudo`, `CAP_SYS_ADMIN` |
+
+### Controls & containment outcomes
+
+| Control | Seatbelt | Bubblewrap | Bubblewrap/AKS | Sprites |
+|---|---|---|---|---|
+| Filesystem grants (ro/rw) | enforced (`EPERM`) | enforced (omits path; ungranted write exits 0) | same as Docker | root FS + overlay; not a per-path grant model |
+| Block all outbound | enforced | enforced | enforced | enforced (allowlist) |
+| Per-site egress allowlist | **unsupported** (rejected at config) | IP/CIDR only, needs `/dev/net/tun` | worked w/o extra config (privileged pod has the device) | **enforced** — DNS allowlist, set from outside, read-only inside; denied → `REFUSED` |
+| Raw-IP / metadata / RFC1918 | (n/a to model) | blocked when net unshared | blocked | blocked (metadata + private always; raw IP unless resolved from an allowed domain) |
+| Syscall filter (seccomp) | none | none | none | none (`Seccomp: 0`) |
+| Wall-clock timeout (`timeoutMs`) | enforced | **silently ignored** | ignored | n/a |
+| CPU / memory / pids cap | **none** (no host equiv) | none — needs container cgroup | none — needs pod limits/QoS | none in-VM; bounded by VM allocation + billing |
+| State rollback | — | — | — | ✅ checkpoint / restore reverts the overlay |
+| Env inheritance | never | never | never | (full VM env) |
+
+### At a glance
+
+| System | Best for | Weakest link |
+|---|---|---|
+| Seatbelt | quick macOS process confinement | shared kernel; no per-site egress; no resource caps |
+| Bubblewrap (Docker) | Linux process confinement, no privilege needed | shared kernel; `timeoutMs` ignored; caps need a cgroup |
+| Bubblewrap on AKS | running MXC in k8s | **needs `privileged`** — a *weaker* posture than local Docker |
+| Fly Sprites | genuinely untrusted agent code | not least-privilege inside (root + `CAP_SYS_ADMIN`); a whole VM per workload |
+
+The through-line: the three MXC rows share the host kernel with **no syscall
+filter**, so a kernel exploit walks out — they are filesystem/namespace
+boundaries, not kernel boundaries. Sprites is the only one that moves the
+boundary to a VM, trading in-guest lockdown (you get root) for a disposable,
+egress-controlled, rewindable machine.
+
 ## What this experiment does
 
 Two suites, answering two different questions.
