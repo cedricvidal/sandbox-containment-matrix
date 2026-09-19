@@ -1,0 +1,60 @@
+name: Containment tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  seatbelt:
+    name: macOS / seatbelt
+    # Seatbelt is a macOS kernel feature, so this backend can only be
+    # exercised on a macOS runner.
+    runs-on: macos-15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+
+    - name: Type check
+      run: pnpm typecheck
+
+    - name: Platform probe
+      run: pnpm probe
+
+    - name: Policy conformance suite
+      run: pnpm dev
+
+    - name: Adversarial containment probes
+      # Records which boundaries hold; a non-zero exit means a probe escaped
+      # or errored, which is a result worth failing on.
+      run: pnpm probes
+
+  bubblewrap:
+    name: Linux / bubblewrap
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build image
+      run: docker compose build mxc
+
+    - name: Policy conformance suite
+      run: docker compose run --rm mxc pnpm dev
+
+    - name: Adversarial containment probes
+      run: docker compose run --rm mxc pnpm probes
